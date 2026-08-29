@@ -91,7 +91,13 @@ export function buildTools(template, { apiBaseUrl, webhookSecret, transferNumber
         custom_sip_headers: {}
       };
     }
-    const out = { ...tool, url: tool.url.replace("{{N8N_BASE_URL}}", base) };
+    const out = {
+      ...tool,
+      url: tool.url.replace("{{N8N_BASE_URL}}", base),
+      // The API reads the tool parameters from the top level of the JSON body.
+      method: tool.method ?? "POST",
+      args_at_root: tool.args_at_root ?? true
+    };
     if (webhookSecret) out.headers = { ...(tool.headers ?? {}), "x-retell-webhook-secret": webhookSecret };
     return out;
   });

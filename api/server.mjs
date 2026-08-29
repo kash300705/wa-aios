@@ -461,7 +461,15 @@ export async function createRuntime(options = {}) {
         });
       }
 
-      const body = await readJson(request);
+      const rawBody = await readJson(request);
+      // Retell custom tools may nest the arguments under `args` (when the tool
+      // isn't configured with args_at_root) and add call metadata. Flatten so
+      // handlers see the parameters regardless of that setting. Also accepts
+      // `parameters` / `arguments` as seen from some Retell versions.
+      const nested = rawBody.args ?? rawBody.parameters ?? rawBody.arguments;
+      const body = nested && typeof nested === "object" && !Array.isArray(nested)
+        ? { ...rawBody, ...nested }
+        : rawBody;
       const tenantId = tenantIdFromRequest(body, url, env);
       const [target, handler] = Array.isArray(method) ? [services[method[0]], method[1]] : [service, method];
       const result = await target[handler](tenantId, body);
