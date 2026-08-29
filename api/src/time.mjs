@@ -155,9 +155,12 @@ export function formatSpoken(value, timeZone, options = {}) {
 
 export function normaliseSlug(value) {
   return String(value ?? "")
+    .normalize("NFKD")
     .trim()
     .toLowerCase()
     .replace(/&/g, "and")
+    // Drop apostrophes so "Men's Cut" == "Mens Cut" (voice STT / LLMs vary).
+    .replace(/['‘’ʼ`]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }

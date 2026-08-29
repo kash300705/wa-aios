@@ -51,9 +51,22 @@ function toTenant(row) {
 
 function resolveService(tenant, requested) {
   const key = normaliseSlug(requested);
-  return tenant.services.find((service) =>
+  if (!key) return undefined;
+  const services = tenant.services ?? [];
+  const exact = services.find((service) =>
     normaliseSlug(service.id || service.name) === key || normaliseSlug(service.name) === key
   );
+  if (exact) return exact;
+  // Voice fallback: a caller / LLM often says "a men's cut" or "cut and finish please"
+  // rather than the exact menu label. Match on containment, longest service first
+  // so "cut" alone still resolves deterministically.
+  if (key.length < 3) return undefined;
+  return [...services]
+    .sort((a, b) => normaliseSlug(b.name).length - normaliseSlug(a.name).length)
+    .find((service) => {
+      const slug = normaliseSlug(service.name);
+      return slug && (slug.includes(key) || key.includes(slug));
+    });
 }
 
 // A tenant with adapter_config.sharedCalendarId runs one shared calendar for the
