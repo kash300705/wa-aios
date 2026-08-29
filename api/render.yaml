@@ -65,11 +65,17 @@ services:
       # Leave unset for a single-salon deployment (serves DEFAULT/TENANT_ID only).
       - key: DASHBOARD_TENANT_IDS
         sync: false
-      # REQUIRED for the Retell call webhook (/webhook/retell). Must be the
-      # Retell API key that carries the "Webhook" badge in the Retell dashboard —
-      # X-Retell-Signature is verified against it. Also used by retell/provision.mjs.
+      # ── Two DIFFERENT Retell secrets. Do NOT set them to the same value. ──
+      # RETELL_API_KEY: the Retell API key with the "Webhook" badge. Verifies
+      #   X-Retell-Signature on the PLATFORM webhook /webhook/retell
+      #   (call_started/ended/analyzed). Also used by retell/provision.mjs.
       - key: RETELL_API_KEY
         sync: false
+      # RETELL_WEBHOOK_SECRET: the `x-retell-webhook-secret` HEADER value that the
+      #   receptionist's TOOL calls send (/webhook/check-availability,
+      #   /webhook/book-appointment, …). retell/provision.mjs bakes this exact
+      #   string into every tool from the local .env, so the two must match.
+      #   generateValue seeds it once; if you rotate it, re-run `npm run retell:sync`.
       - key: RETELL_WEBHOOK_SECRET
         generateValue: true
       - key: DASHBOARD_API_TOKEN

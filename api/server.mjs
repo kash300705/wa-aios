@@ -183,7 +183,21 @@ export async function createRuntime(options = {}) {
     maxRetryMs: options.messageRetryMaxMs,
     claimLeaseMs: options.messageClaimLeaseMs
   });
+  // Two DIFFERENT Retell secrets, easy to confuse:
+  //  - RETELL_API_KEY      → verifies Retell's PLATFORM webhook (/webhook/retell,
+  //                          call_started/ended/analyzed) via X-Retell-Signature.
+  //  - RETELL_WEBHOOK_SECRET → the `x-retell-webhook-secret` header the RECEPTIONIST's
+  //                          tool calls send (check-availability, book-appointment, …).
+  //                          Must equal the value baked into the agent's tools by
+  //                          retell/provision.mjs (i.e. the local .env RETELL_WEBHOOK_SECRET).
   const webhookSecret = String(env.RETELL_WEBHOOK_SECRET ?? "");
+  if (webhookSecret && env.RETELL_API_KEY && webhookSecret === env.RETELL_API_KEY) {
+    writeLog(logger, "error", "retell_secret_misconfigured", {
+      message: "RETELL_WEBHOOK_SECRET is set to the same value as RETELL_API_KEY. They are different secrets — "
+        + "the receptionist's tool webhooks (/webhook/check-availability etc.) will 401 until RETELL_WEBHOOK_SECRET "
+        + "matches the x-retell-webhook-secret header baked into the agent's tools (retell/provision.mjs / local .env)."
+    });
+  }
   const retellWebhookAuthMode = String(env.RETELL_WEBHOOK_VERIFY ?? "true").toLowerCase() === "false"
     ? "disabled (RETELL_WEBHOOK_VERIFY=false)"
     : env.RETELL_API_KEY
@@ -191,6 +205,11 @@ export async function createRuntime(options = {}) {
       : webhookSecret
         ? "shared-secret-only — set RETELL_API_KEY for Retell's platform webhook"
         : "unconfigured";
+  const toolWebhookAuthMode = webhookSecret
+    ? (webhookSecret === env.RETELL_API_KEY
+        ? "MISCONFIGURED — RETELL_WEBHOOK_SECRET equals RETELL_API_KEY"
+        : "shared-secret (RETELL_WEBHOOK_SECRET)")
+    : "OPEN — RETELL_WEBHOOK_SECRET is unset";
   // Tenants the dashboard token is allowed to read. Defaults to the single
   // deployment tenant; set DASHBOARD_TENANT_IDS to a comma list for multi-salon.
   const dashboardTenantAllowList = new Set(
@@ -358,11 +377,25 @@ export async function createRuntime(options = {}) {
 
       const isWebhook = url.pathname.startsWith("/webhook/");
       if (isWebhook && webhookSecret) {
-        if (!secretsMatch(webhookSecret, request.headers["x-retell-webhook-secret"])) {
-          writeLog(logger, "warn", "webhook_auth_failed", { requestId, path: url.pathname, ip });
+        const providedSecret = request.headers["x-retell-webhook-secret"];
+        if (!secretsMatch(webhookSecret, providedSecret)) {
+          const provided = providedSecret ? String(Array.isArray(providedSecret) ? providedSecret[0] : providedSecret) : "";
+          writeLog(logger, "warn", "webhook_auth_failed", {
+            requestId,
+            path: url.pathname,
+            ip,
+            hasHeader: Boolean(provided),
+            providedLength: provided.length,
+            expectedLength: webhookSecret.length,
+            providedLooksLikeApiKey: provided.startsWith("key_"),
+            hint: !provided
+              ? "request has no x-retell-webhook-secret header"
+              : "x-retell-webhook-secret does not match RETELL_WEBHOOK_SECRET on this service — re-run retell/provision.mjs or align the values"
+          });
           return sendJson(response, 401, {
             error: "unauthorized",
             message: "I could not verify this call request. Please ask the salon team for help.",
+            reason: provided ? "x-retell-webhook-secret mismatch" : "x-retell-webhook-secret header missing",
             requestId
           });
         }
@@ -382,6 +415,7 @@ export async function createRuntime(options = {}) {
           database: opened.driver,
           calendarProvider: calendar.provider,
           retellWebhookAuth: retellWebhookAuthMode,
+          toolWebhookAuth: toolWebhookAuthMode,
           aiEnabled: Boolean(ai?.enabled),
           noShowsInferredThisRequest: inferred.length,
           commit: env.RENDER_GIT_COMMIT ? env.RENDER_GIT_COMMIT.slice(0, 7) : null,
