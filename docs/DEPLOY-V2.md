@@ -67,11 +67,16 @@ After the next real call you'll see it on the dashboard **Calls** page with the
 recording, transcript and outcome; an unbooked enquiry also becomes a lead with the
 follow-up ladder.
 
-## 3. Deploy the dashboard
+## 3. Deploy the dashboard  — DONE
 
-The dashboard (`dashboard/`, Next.js 15) is a **separate service** — it is not
-served by the API. `GET https://wa-aios-api.onrender.com/` returning `not_found`
-is expected; that host is the API only. Pick one of:
+**Live: https://wa-aios-dashboard.onrender.com** (Render service `wa-aios-dashboard`,
+Blueprint-managed, free plan). Login password is `DASHBOARD_PASSWORD` on that
+service. `AIOS_API_URL` + `DASHBOARD_API_TOKEN` (auto-wired from `wa-aios-api`) are
+set. `GET /api/health` → `{ "apiConfigured": true }`.
+
+The dashboard is a **separate service** — it is not served by the API.
+`GET https://wa-aios-api.onrender.com/` returning `not_found` is expected; that
+host is the API only. If you ever need to recreate it, pick one of:
 
 Env vars (all three deploy targets need these):
 
