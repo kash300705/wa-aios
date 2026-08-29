@@ -1,11 +1,9 @@
-# Render Blueprint for the whole stack:
+# Render Blueprint for the whole stack (the "wa-aios" Blueprint reads this file —
+# its "Blueprint Path" is set to api/render.yaml):
 #   wa-aios-api        — Node API (Retell webhooks, booking, CRM/dashboard API)
 #   wa-aios-dashboard  — Next.js owner dashboard / CRM
 #   wa-aios-db         — Postgres
-#
-# This file must live at the REPO ROOT for Render to read it as a Blueprint.
-# If wa-aios-api was created manually (not via a Blueprint), see docs/DEPLOY-V2.md
-# for how to add the dashboard as a standalone service instead.
+# rootDir paths below are relative to the repo root regardless of this file's location.
 
 services:
   - type: web
