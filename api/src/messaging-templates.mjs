@@ -287,10 +287,10 @@ export function renderMessageTemplate({ tenant, templateId, contact = {}, appoin
   const scheduledAppointmentTime = appointment.starts_at
     ? formatSpoken(appointment.starts_at, tenant.timezone || "Europe/Zurich")
     : "";
-  const salonAddress = tenant.contact_config?.address || tenant.contact_config?.location || "";
+  const salonAddress = String(tenant.contact_config?.address || tenant.contact_config?.location || "").trim();
   const variables = {
-    salonName: tenant.name || "the salon",
-    firstName: contact.first_name || "there",
+    salonName: String(tenant.name || "the salon").trim() || "the salon",
+    firstName: String(contact.first_name || "there").trim() || "there",
     service: appointment.service || "your appointment",
     staff: appointment.staff || "our team",
     appointmentTime: scheduledAppointmentTime,
