@@ -82,22 +82,41 @@ export class DashboardApi {
 
   // ---- CALLS ------------------------------------------------------------
   async calls(tenantId, url) {
-    const limit = clamp(url.searchParams.get("limit"), 1, 500, 100);
+    const limit = clamp(url.searchParams.get("limit"), 1, 500, 150);
     const rows = (await this.db.query(`
       select k.id::text, k.retell_call_id, k.started_at, k.ended_at, k.duration_seconds, k.answered, k.outcome, k.direction,
              k.disclosure_played, k.transcript, k.recording_url, k.summary, k.sentiment, k.user_sentiment,
              k.from_number, k.to_number, k.call_successful, k.in_voicemail, k.cost_cents,
-             k.contact_id::text, c.first_name, c.last_name, c.phone_e164
-      from calls k left join contacts c on c.id = k.contact_id
+             k.contact_id::text, k.appointment_id::text, c.first_name, c.last_name, c.phone_e164,
+             a.service as appointment_service, a.starts_at as appointment_starts_at, a.status as appointment_status
+      from calls k
+      left join contacts c on c.id = k.contact_id
+      left join appointments a on a.id = k.appointment_id
       where k.tenant_id = $1::uuid order by k.started_at desc limit $2`, [tenantId, limit])).rows;
     const stats = (await this.db.query(`
       select count(*)::int as total,
              count(*) filter (where answered)::int as answered,
              count(*) filter (where outcome = 'booked')::int as booked,
              count(*) filter (where outcome = 'transferred')::int as transferred,
+             count(*) filter (where transcript is not null and transcript <> '' and transcript <> '[Demo transcript omitted]')::int as with_transcript,
              coalesce(round(avg(duration_seconds))::int, 0) as avg_duration
       from calls where tenant_id = $1::uuid and started_at >= now() - interval '30 days'`, [tenantId])).rows[0];
     return { calls: rows, stats };
+  }
+
+  async call(tenantId, url) {
+    const id = url.searchParams.get("id");
+    const row = (await this.db.query(`
+      select k.*, k.id::text as id, k.contact_id::text as contact_id, k.appointment_id::text as appointment_id,
+             k.cost_cents, c.first_name, c.last_name, c.phone_e164, c.email,
+             a.service as appointment_service, a.starts_at as appointment_starts_at, a.staff as appointment_staff, a.status as appointment_status
+      from calls k
+      left join contacts c on c.id = k.contact_id
+      left join appointments a on a.id = k.appointment_id
+      where k.tenant_id = $1::uuid and k.id = $2::uuid`, [tenantId, id])).rows[0];
+    if (!row) return { error: "not_found" };
+    delete row.tenant_id;
+    return { call: row };
   }
 
   // ---- LEADS ----------------------------------------------------------
@@ -155,7 +174,9 @@ export class DashboardApi {
         select id::text, status, status_source, starts_at, ends_at, service, value_chf::float8, staff, lead_source, booked_via
         from appointments where tenant_id = $1::uuid and contact_id = $2::uuid order by starts_at desc limit 50`, [tenantId, id]),
       this.db.query(`
-        select id::text, started_at, duration_seconds, outcome, direction, answered, summary, recording_url, transcript, sentiment
+        select id::text, retell_call_id, started_at, ended_at, duration_seconds, outcome, direction, answered,
+               summary, recording_url, transcript, sentiment, user_sentiment, disclosure_played,
+               from_number, appointment_id::text
         from calls where tenant_id = $1::uuid and contact_id = $2::uuid order by started_at desc limit 30`, [tenantId, id]),
       this.db.query(`
         select id::text, channel, direction, body, template_id, delivery_status, ai_generated, scheduled_for, sent_at, created_at
@@ -398,6 +419,7 @@ export const DASHBOARD_ROUTES = new Map([
   ["/api/dashboard/activity", "activity"],
   ["/api/dashboard/appointments", "appointments"],
   ["/api/dashboard/calls", "calls"],
+  ["/api/dashboard/call", "call"],
   ["/api/dashboard/leads", "leads"],
   ["/api/dashboard/customers", "customers"],
   ["/api/dashboard/customer", "customer"],

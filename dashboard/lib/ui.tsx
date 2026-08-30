@@ -140,6 +140,50 @@ export function MiniBars({ series, keys, height = 150 }: { series: Record<string
   );
 }
 
+/** Inline audio player for a call recording, with a fallback link. */
+export function Recording({ url }: { url?: string | null }) {
+  if (!url) return <span className="muted">No recording</span>;
+  return (
+    <div className="recording">
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio controls preload="none" src={url} className="recording-audio" />
+      <a className="btn sm ghost" href={url} target="_blank" rel="noreferrer">Open ↗</a>
+    </div>
+  );
+}
+
+/** Render a Retell "Agent: … / User: …" transcript as a readable conversation. */
+export function CallTranscript({ text }: { text?: string | null }) {
+  if (!text || text === "[Demo transcript omitted]") {
+    return <div className="muted" style={{ fontSize: 13 }}>No transcript for this call.</div>;
+  }
+  const lines = text.split("\n");
+  const turns: { who: "agent" | "user" | "system"; text: string }[] = [];
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) continue;
+    const m = /^(Agent|User|Assistant|Bot|Caller|Customer)\s*:\s*(.*)$/i.exec(line);
+    if (m) {
+      const who = /agent|assistant|bot/i.test(m[1]) ? "agent" : "user";
+      turns.push({ who, text: m[2] });
+    } else if (turns.length) {
+      turns[turns.length - 1].text += (turns[turns.length - 1].text ? " " : "") + line;
+    } else {
+      turns.push({ who: "system", text: line });
+    }
+  }
+  return (
+    <div className="transcript">
+      {turns.map((t, i) => (
+        <div key={i} className={`t-turn t-${t.who}`}>
+          <span className="t-who">{t.who === "agent" ? "AI" : t.who === "user" ? "Caller" : "•"}</span>
+          <span className="t-text">{t.text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function DataTable<T>({ columns, rows, empty = "Nothing here yet.", rowKey }: {
   columns: { key: string; label: string; num?: boolean; render: (row: T) => ReactNode }[];
   rows: T[];

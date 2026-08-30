@@ -28,12 +28,18 @@ export const LEAD_TEMPLATE_IDS = [
 const clientError = (message) => Object.assign(new Error(message), { statusCode: 400 });
 
 export function normalisePhone(value) {
-  const digits = String(value ?? "").replace(/[^\d+]/g, "");
-  if (!digits) return null;
-  if (digits.startsWith("+")) return digits;
-  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
-  if (digits.startsWith("0") && digits.length === 10) return `+41${digits.slice(1)}`; // Swiss national format
-  return `+${digits}`;
+  const raw = String(value ?? "").trim().toLowerCase();
+  // Retell web/test calls and blocked caller-id arrive as these — not real numbers.
+  if (!raw || ["web", "web_call", "webcall", "anonymous", "unknown", "restricted", "private", "+0", "0"].includes(raw)) {
+    return null;
+  }
+  const digits = raw.replace(/[^\d+]/g, "");
+  const bare = digits.replace(/\D/g, "");
+  if (!bare || /^0+$/.test(bare) || bare.length < 7) return null; // too short / all zeros
+  if (digits.startsWith("+")) return `+${bare}`;
+  if (bare.startsWith("00")) return `+${bare.slice(2)}`;
+  if (bare.startsWith("0") && bare.length === 10) return `+41${bare.slice(1)}`; // Swiss national format
+  return `+${bare}`;
 }
 
 export function firstNameOf(name) {

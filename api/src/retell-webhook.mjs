@@ -131,14 +131,37 @@ export class RetellWebhookService {
 
     const result = await this.db.transaction(async (tx) => {
       let contactId = null;
-      if (callerNumber || custom.user_email) {
+      let linkedAppointmentId = null;
+
+      // 1. The strongest link: an appointment booked DURING this call already
+      //    resolved the customer. Use that same contact so the call attaches to
+      //    the customer's real history (web/phone calls often have an unreliable
+      //    from_number, which otherwise creates a second orphaned contact).
+      const bookedInCall = (await tx.query(
+        "select id::text, contact_id::text from appointments where tenant_id = $1::uuid and retell_call_id = $2 order by created_at desc limit 1",
+        [tenant.id, callId]
+      )).rows[0];
+      if (bookedInCall) {
+        contactId = bookedInCall.contact_id;
+        linkedAppointmentId = bookedInCall.id;
+        // Backfill the caller's phone onto that contact if it has none yet.
+        if (callerNumber) {
+          await tx.query(
+            "update contacts set phone_e164 = coalesce(phone_e164, $2), updated_at = now() where id = $1::uuid and (phone_e164 is null or phone_e164 = '')",
+            [contactId, callerNumber]
+          );
+        }
+      }
+
+      // 2. Otherwise match / create by the caller's number or email.
+      if (!contactId && (callerNumber || custom.user_email)) {
         const email = String(custom.user_email || "").trim().toLowerCase();
         const existing = callerNumber
           ? (await tx.query("select id::text, first_name from contacts where tenant_id = $1::uuid and phone_e164 = $2", [tenant.id, callerNumber])).rows[0]
-          : null;
+          : (email ? (await tx.query("select id::text, first_name from contacts where tenant_id = $1::uuid and lower(email) = $2", [tenant.id, email])).rows[0] : null);
         if (existing) {
           contactId = existing.id;
-          if (custom.user_name && existing.first_name === "Gast") {
+          if (custom.user_name && (!existing.first_name || existing.first_name === "Gast")) {
             await tx.query("update contacts set first_name = $2, updated_at = now() where id = $1::uuid", [contactId, firstNameOf(custom.user_name)]);
           }
         } else if (callerNumber) {
@@ -158,15 +181,16 @@ export class RetellWebhookService {
           tenant_id, contact_id, retell_call_id, started_at, ended_at, duration_seconds,
           answered, outcome, direction, from_number, to_number, transcript, transcript_object,
           recording_url, disclosure_played, summary, sentiment, user_sentiment, call_successful,
-          in_voicemail, disconnection_reason, analysis, cost_cents
+          in_voicemail, disconnection_reason, analysis, cost_cents, appointment_id
         ) values (
           $1::uuid, $2::uuid, $3, $4::timestamptz, $5::timestamptz, $6::int,
           $7::boolean, $8, $9, $10, $11, nullif($12,''), $13::jsonb,
           nullif($14,''), $15::boolean, nullif($16,''), $17, $18, $19::boolean,
-          $20::boolean, $21, $22::jsonb, $23::int
+          $20::boolean, $21, $22::jsonb, $23::int, $24::uuid
         )
         on conflict (tenant_id, retell_call_id) do update set
           contact_id = coalesce(excluded.contact_id, calls.contact_id),
+          appointment_id = coalesce(excluded.appointment_id, calls.appointment_id),
           ended_at = coalesce(excluded.ended_at, calls.ended_at),
           duration_seconds = greatest(excluded.duration_seconds, calls.duration_seconds),
           answered = excluded.answered or calls.answered,
@@ -196,7 +220,8 @@ export class RetellWebhookService {
         typeof analysis.in_voicemail === "boolean" ? analysis.in_voicemail : null,
         call.disconnection_reason || null,
         JSON.stringify({ event, custom, agent_id: call.agent_id, public_log_url: call.public_log_url }),
-        call.call_cost?.combined_cost != null ? Math.round(Number(call.call_cost.combined_cost)) : null
+        call.call_cost?.combined_cost != null ? Math.round(Number(call.call_cost.combined_cost)) : null,
+        linkedAppointmentId
       ]);
 
       const persisted = row.rows[0];

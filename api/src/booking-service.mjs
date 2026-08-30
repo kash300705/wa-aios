@@ -21,8 +21,21 @@ function iso(value) {
 }
 
 function normalisePhone(value) {
-  const digits = String(value ?? "").replace(/\D/g, "");
-  return digits ? `+${digits}` : "";
+  const raw = String(value ?? "").trim().toLowerCase();
+  // Retell web/test calls and blocked caller-id arrive as these, not real numbers.
+  if (!raw || ["web", "web_call", "webcall", "anonymous", "unknown", "restricted", "private", "+0", "0"].includes(raw)) {
+    return "";
+  }
+  const bare = raw.replace(/\D/g, "");
+  if (!bare || /^0+$/.test(bare) || bare.length < 7) return "";
+  return `+${bare}`;
+}
+
+/** The Retell call id, if this webhook came from a receptionist tool call. */
+function retellCallId(body) {
+  const id = body?.callId ?? body?.call_id ?? body?.retellCallId
+    ?? (body?.call && (body.call.call_id ?? body.call.callId));
+  return typeof id === "string" && id.trim() ? id.trim() : null;
 }
 
 function firstName(value) {
@@ -416,8 +429,10 @@ export class BookingService {
   }
 
   validateRequest(tenant, body, { booking = false } = {}) {
-    if (booking && (!body.customerName || !body.customerPhone)) {
-      return { error: { code: "invalid_request", message: "Please provide startTime, serviceId, customerName and customerPhone." } };
+    // A name is required; a phone is strongly preferred (for reminders) but not
+    // mandatory — web calls and callers who decline still get a real booking.
+    if (booking && !String(body.customerName ?? "").trim()) {
+      return { error: { code: "invalid_request", message: "Please provide the caller's name for the booking." } };
     }
     const service = resolveService(tenant, body.serviceId);
     if (!service) {
@@ -586,13 +601,16 @@ export class BookingService {
           email: body.customerEmail,
           whatsappConsent: true
         });
+        const callId = retellCallId(body);
         const appointmentResult = await tx.query(`
           insert into appointments (
             tenant_id, contact_id, external_id, platform, status, status_source,
-            starts_at, ends_at, service, value_chf, staff, staff_calendar_id, lead_source
+            starts_at, ends_at, service, value_chf, staff, staff_calendar_id, lead_source,
+            retell_call_id, booked_via
           ) values (
             $1::uuid, $2::uuid, $3, $4, 'booked', 'workflow',
-            $5::timestamptz, $6::timestamptz, $7, $8::numeric, $9, $10, 'call'
+            $5::timestamptz, $6::timestamptz, $7, $8::numeric, $9, $10, 'call',
+            $11, $12
           ) returning *, id::text as id, contact_id::text as contact_id
         `, [
           tenant.id,
@@ -604,7 +622,9 @@ export class BookingService {
           service.name,
           Number(service.priceChf ?? tenant.avg_appointment_value_chf),
           staff.name,
-          staff.calendarId
+          staff.calendarId,
+          callId,
+          String(body.bookedVia ?? (callId ? "call" : "dashboard"))
         ]);
         const appointment = appointmentResult.rows[0];
         await tx.query(`

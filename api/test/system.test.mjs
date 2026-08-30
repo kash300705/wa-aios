@@ -132,6 +132,55 @@ test("Retell webhook: call_analyzed persists the recording, transcript and outco
   assert.ok(followUps >= 1, "an unbooked call becomes a lead with follow-ups");
 });
 
+test("Retell webhook: a call that booked in-call links to the SAME contact as the appointment", async () => {
+  const callId = `call_${randomUUID()}`;
+  // 1. the receptionist books during the call (tool body carries call metadata)
+  const day = new Date();
+  day.setDate(day.getDate() + 9);
+  while (day.getDay() !== 3) day.setDate(day.getDate() + 1); // a Wednesday (tenant open)
+  const startIso = `${day.toISOString().slice(0, 10)}T09:00:00+02:00`;
+  const booked = await webhook("book-appointment", {
+    startTime: startIso, serviceId: "Men's Cut",
+    customerName: "Web Caller", customerPhone: "", // web test call: no caller number
+    call: { call_id: callId, from_number: "web_call" }
+  });
+  assert.equal(booked.status, "booked", JSON.stringify(booked));
+  const appt = (await q(`select id::text, contact_id::text, retell_call_id from appointments where id = $1::uuid`, [booked.appointmentId])).rows[0];
+  assert.equal(appt.retell_call_id, callId, "appointment stores the call id");
+
+  const contactsBefore = (await q(`select count(*)::int n from contacts where tenant_id = $1::uuid`, [tenantId])).rows[0].n;
+
+  // 2. call_analyzed arrives with an unreliable from_number
+  await webhook("retell", {
+    event: "call_analyzed",
+    call: {
+      call_id: callId, direction: "inbound", from_number: "+0",
+      start_timestamp: Date.now() - 120_000, end_timestamp: Date.now(), duration_ms: 120_000,
+      transcript: "Agent: Thanks for calling\nUser: I'd like a men's cut\nAgent: Booked.",
+      recording_url: "https://rec.example/wc.wav",
+      call_analysis: { call_summary: "Booked a men's cut.", custom_analysis_data: { outcome: "booked", appointment_booked: true, disclosure_played: true, user_name: "Web Caller" } }
+    }
+  });
+
+  const contactsAfter = (await q(`select count(*)::int n from contacts where tenant_id = $1::uuid`, [tenantId])).rows[0].n;
+  assert.equal(contactsAfter, contactsBefore, "no orphaned second contact was created from '+0'");
+
+  const call = (await q(`select contact_id::text, appointment_id::text, transcript, recording_url from calls where tenant_id = $1::uuid and retell_call_id = $2`, [tenantId, callId])).rows[0];
+  assert.equal(call.contact_id, appt.contact_id, "call attaches to the appointment's contact");
+  assert.equal(call.appointment_id, appt.id, "call links back to the appointment");
+  assert.match(call.transcript, /men's cut/);
+  assert.equal(call.recording_url, "https://rec.example/wc.wav");
+
+  // the customer 360 shows both the appointment and the call
+  const dash = await dash_customer(appt.contact_id);
+  assert.ok(dash.appointments.some((a) => a.id === appt.id));
+  assert.ok(dash.calls.some((k) => k.retell_call_id === callId && k.transcript));
+});
+
+async function dash_customer(id) {
+  return dash(`/api/dashboard/customer?id=${id}`);
+}
+
 test("Retell webhook: a valid X-Retell-Signature is accepted, a bad one is 401", async () => {
   const callId = `call_${randomUUID()}`;
   const body = JSON.stringify({

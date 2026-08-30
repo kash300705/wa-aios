@@ -244,3 +244,35 @@ table.data td.num, table.data th.num { text-align: right; font-variant-numeric: 
 
 .tag-input { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); font-size: 11.5px; }
+
+/* ---------- calls: expandable rows + transcript + recording ---------- */
+.call-list { display: flex; flex-direction: column; gap: 8px; }
+.call-row { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); overflow: hidden; }
+.call-row > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px; font-size: 13px; flex-wrap: wrap;
+}
+.call-row > summary::-webkit-details-marker { display: none; }
+.call-row > summary::before { content: "▸"; color: var(--muted-2); font-size: 11px; transition: transform .15s; }
+.call-row[open] > summary::before { transform: rotate(90deg); }
+.call-row > summary:hover { background: color-mix(in srgb, var(--brand) 5%, transparent); }
+.call-row .cr-when { display: flex; flex-direction: column; min-width: 132px; }
+.call-row .cr-who { display: flex; flex-direction: column; min-width: 120px; }
+.call-row .cr-summary { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-row .cr-flags { display: flex; gap: 5px; margin-left: auto; }
+.call-detail { padding: 4px 16px 16px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 12px; }
+.cd-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; padding-top: 10px; }
+.cd-meta a { color: var(--brand); }
+.cd-summary { margin: 0; font-size: 13px; color: var(--ink-dim); background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 9px 11px; }
+
+.recording { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.recording-audio { height: 34px; max-width: 360px; width: 100%; }
+.recording-audio::-webkit-media-controls-panel { background: var(--panel-2); }
+
+.transcript { display: flex; flex-direction: column; gap: 7px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
+.t-turn { display: grid; grid-template-columns: 46px 1fr; gap: 10px; font-size: 13px; line-height: 1.5; }
+.t-who { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-2); padding-top: 2px; }
+.t-turn.t-agent .t-who { color: var(--brand); }
+.t-turn.t-user .t-text { color: var(--ink); }
+.t-turn.t-agent .t-text { color: var(--ink-dim); }
+.t-text { white-space: pre-wrap; }

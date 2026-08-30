@@ -77,7 +77,8 @@ export type Live = {
 };
 export type ActivityRow = { event_type: string; aggregate_type: string; occurred_at: string; payload: Record<string, unknown>; first_name: string; last_name: string };
 export type Appointment = { id: string; status: string; status_source: string; starts_at: string; ends_at: string; service: string; value_chf: number; staff: string; lead_source: string | null; booked_via?: string | null; recovered_from_no_show_id: string | null; contact_id?: string; first_name: string; last_name: string | null; phone_e164: string | null; email: string | null };
-export type Call = { id: string; retell_call_id: string; started_at: string; ended_at?: string | null; duration_seconds: number; answered: boolean; outcome: string | null; direction?: string; disclosure_played: boolean; transcript: string | null; recording_url: string | null; summary?: string | null; sentiment?: string | null; user_sentiment?: string | null; from_number?: string | null; to_number?: string | null; call_successful?: boolean | null; in_voicemail?: boolean | null; cost_cents?: number | null; contact_id?: string | null; first_name: string | null; last_name?: string | null; phone_e164: string | null };
+export type Call = { id: string; retell_call_id: string; started_at: string; ended_at?: string | null; duration_seconds: number; answered: boolean; outcome: string | null; direction?: string; disclosure_played: boolean; transcript: string | null; recording_url: string | null; summary?: string | null; sentiment?: string | null; user_sentiment?: string | null; from_number?: string | null; to_number?: string | null; call_successful?: boolean | null; in_voicemail?: boolean | null; cost_cents?: number | null; contact_id?: string | null; appointment_id?: string | null; first_name: string | null; last_name?: string | null; phone_e164: string | null; appointment_service?: string | null; appointment_starts_at?: string | null; appointment_status?: string | null; disconnection_reason?: string | null };
+export type CallStats = { total: number; answered: number; booked: number; transferred: number; with_transcript: number; avg_duration: number };
 export type Lead = { id: string; source: string; channel: string | null; service_interest: string | null; urgency: string; preferred_time: string | null; notes: string | null; status: string; booked_appointment_id: string | null; created_at: string; updated_at: string; contact_id: string; first_name: string; last_name: string | null; phone_e164: string | null; email: string | null; manychat_subscriber_id: string | null; follow_ups_sent: number; next_follow_up_at: string | null };
 export type Funnel = { status: string; count: number }[];
 export type Customer = { id: string; first_name: string; last_name: string | null; email: string | null; phone_e164: string | null; manychat_subscriber_id: string | null; lifecycle_stage: string; last_interaction_at: string | null; last_interaction_kind: string | null; last_booked_at: string | null; first_booked_at: string | null; total_bookings: number; completed_bookings: number; no_show_count: number; lifetime_value_chf: number; tags: string[]; marketing_opt_out: boolean; source: string; created_at: string; lead_status: string | null; upcoming: number };
@@ -114,16 +115,18 @@ export async function getAppointments(scope: "upcoming" | "past") {
   return (await snapshot()).appointments[scope];
 }
 export async function getCalls() {
-  if (connected) return apiGet<{ calls: Call[]; stats: { total: number; answered: number; booked: number; transferred: number; avg_duration: number } }>("calls", { limit: 300 });
-  return { calls: (await snapshot()).calls, stats: { total: 0, answered: 0, booked: 0, transferred: 0, avg_duration: 0 } };
+  if (connected) return apiGet<{ calls: Call[]; stats: CallStats }>("calls", { limit: 200 });
+  return { calls: (await snapshot()).calls, stats: { total: 0, answered: 0, booked: 0, transferred: 0, with_transcript: 0, avg_duration: 0 } };
 }
+export const getCall = (id: string) => apiGet<{ call: Record<string, unknown>; error?: string }>("call", { id });
 export async function getLeads(status?: string) {
   if (connected) return apiGet<{ leads: Lead[]; funnel: Funnel }>("leads", { status, limit: 300 });
   const s = await snapshot();
   return { leads: status ? s.leads.filter((l) => l.status === status) : s.leads, funnel: s.funnel };
 }
 export const getCustomers = (params: { stage?: string; q?: string } = {}) => apiGet<{ customers: Customer[]; segments: Segment[] }>("customers", { ...params, limit: 300 });
-export const getCustomer = (id: string) => apiGet<{ contact: Record<string, unknown>; appointments: Appointment[]; calls: Call[]; messages: ConversationMessage[]; notes: { id: string; author: string; kind: string; body: string; pinned: boolean; metadata: Record<string, unknown>; created_at: string }[]; leads: Lead[]; sequences: SequenceRun[]; error?: string }>("customer", { id });
+export type CustomerCall = { id: string; retell_call_id: string; started_at: string; ended_at: string | null; duration_seconds: number; outcome: string | null; direction: string; answered: boolean; summary: string | null; recording_url: string | null; transcript: string | null; sentiment: string | null; user_sentiment: string | null; disclosure_played: boolean; from_number: string | null; appointment_id: string | null };
+export const getCustomer = (id: string) => apiGet<{ contact: Record<string, unknown>; appointments: Appointment[]; calls: CustomerCall[]; messages: ConversationMessage[]; notes: { id: string; author: string; kind: string; body: string; pinned: boolean; metadata: Record<string, unknown>; created_at: string }[]; leads: Lead[]; sequences: SequenceRun[]; error?: string }>("customer", { id });
 export const getConversations = (status?: string) => apiGet<{ conversations: Conversation[] }>("conversations", { status });
 export const getConversation = (id: string) => apiGet<{ conversation: Conversation & { lifecycle_stage: string; total_bookings: number }; messages: ConversationMessage[]; error?: string }>("conversation", { id });
 export const getFollowups = () => apiGet<{ active: SequenceRun[]; upcoming: QueuedMessage[]; summary: { sequence_type: string; active: number; completed: number; exited: number }[]; outbound30: { delivery_status: string; count: number }[] }>("followups");

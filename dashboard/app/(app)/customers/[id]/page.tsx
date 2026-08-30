@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getCustomer, connected } from "../../../../lib/api";
 import { createNote, updateCustomer, setAppointmentOutcome } from "../../../../lib/actions";
 import { fmt, label, CHANNEL_LABEL } from "../../../../lib/format";
-import { Card, PageHead, Stat, Badge, Empty, Avatar, Offline } from "../../../../lib/ui";
+import { Card, PageHead, Stat, Badge, Empty, Avatar, Offline, CallTranscript, Recording } from "../../../../lib/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +79,38 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
                 ))}
               </div>
             ) : <Empty>No appointments.</Empty>}
+          </Card>
+
+          <Card title="Calls" action={<Link className="btn sm ghost" href="/calls">All calls →</Link>}>
+            {data.calls.length ? (
+              <div className="call-list">
+                {data.calls.map((k) => {
+                  const hasTranscript = Boolean(k.transcript && k.transcript !== "[Demo transcript omitted]");
+                  return (
+                    <details key={k.id} className="call-row" open={data.calls.length === 1 && hasTranscript}>
+                      <summary>
+                        <span className="cr-when">
+                          <span className="cell-strong">{fmt.dateTime(k.started_at)}</span>
+                          <span className="cell-sub">{fmt.dur(k.duration_seconds)}</span>
+                        </span>
+                        <Badge value={k.outcome || "inquiry"} />
+                        {k.user_sentiment ? <Badge value={k.user_sentiment}>{k.user_sentiment}</Badge> : null}
+                        <span className="cr-summary muted">{k.summary || (hasTranscript ? "" : "no summary")}</span>
+                        <span className="cr-flags">
+                          {k.recording_url ? <span className="badge info">▶</span> : null}
+                          {hasTranscript ? <span className="badge ok">transcript</span> : null}
+                        </span>
+                      </summary>
+                      <div className="call-detail">
+                        <Recording url={k.recording_url} />
+                        {k.summary ? <p className="cd-summary">{k.summary}</p> : null}
+                        <CallTranscript text={k.transcript} />
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            ) : <Empty>No calls.</Empty>}
           </Card>
         </div>
 
