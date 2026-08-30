@@ -8,11 +8,19 @@ export function emailConfigStatus(env = process.env) {
   const transport = String(env.MESSAGE_TRANSPORT_EMAIL ?? "").trim().toLowerCase();
   const hasKey = Boolean(env.RESEND_API_KEY);
   const from = env.EMAIL_FROM || env.MAIL_FROM || "";
-  if (transport && transport !== "resend") {
-    return { configured: false, reason: `MESSAGE_TRANSPORT_EMAIL is "${transport}", not "resend"` };
+  // The email channel only actually reaches Resend when MESSAGE_TRANSPORT_EMAIL
+  // is exactly "resend"; anything else (including unset) routes to the no-op
+  // transport and every email is recorded as "stubbed".
+  if (transport !== "resend") {
+    return {
+      configured: false,
+      reason: transport
+        ? `MESSAGE_TRANSPORT_EMAIL is "${transport}", must be "resend"`
+        : "MESSAGE_TRANSPORT_EMAIL is not set to \"resend\" (emails are being stubbed, not sent)"
+    };
   }
   if (!hasKey) return { configured: false, reason: "RESEND_API_KEY is not set on the API" };
-  if (!from) return { configured: false, reason: "EMAIL_FROM is not set on the API" };
+  if (!from) return { configured: false, reason: "EMAIL_FROM (or MAIL_FROM) is not set on the API" };
   return { configured: true };
 }
 
