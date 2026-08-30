@@ -11,6 +11,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { normalisePhone, firstNameOf } from "./leads.mjs";
+import { renderMessageTemplate, emailTypeEnabled } from "./messaging-templates.mjs";
+import { isValidEmail } from "./dispatcher.mjs";
 
 const OUTCOME_MAP = {
   booked: "booked",
@@ -248,6 +250,17 @@ export class RetellWebhookService {
       return { callDbId: persisted.id, contactId, outcome };
     });
 
+    // Missed / abandoned / voicemail call, and we hold a valid email for the
+    // contact → send a single "sorry we missed you" email. Independent of the
+    // lead path below; idempotent per (call, template) via a unique index.
+    if (event === "call_analyzed" && result.contactId && ["missed", "voicemail"].includes(result.outcome)) {
+      try {
+        await this.sendMissedCallEmail(tenant, result.callDbId, result.contactId);
+      } catch (error) {
+        this.log("warn", "missed_call_email_failed", { message: error.message, callId });
+      }
+    }
+
     // A completed call that did NOT book, from a reachable caller, becomes a
     // lead so the standard follow-up ladder chases it.
     if (
@@ -274,5 +287,33 @@ export class RetellWebhookService {
 
     this.log("info", "retell_webhook_handled", { event, callId, outcome: result.outcome, contactLinked: Boolean(result.contactId) });
     return { ok: true, event, callId, ...result };
+  }
+
+  /** Queue one operational "sorry we missed your call" email if — and only if —
+   *  the contact has a valid, consented email address and the type is enabled.
+   *  Never throws for a missing/invalid email; that path simply does nothing. */
+  async sendMissedCallEmail(tenant, callDbId, contactId) {
+    if (!emailTypeEnabled(tenant, "missedCall")) return { sent: false, reason: "disabled" };
+    const contact = (await this.db.query(
+      "select first_name, email, email_consent from contacts where id = $1::uuid and tenant_id = $2::uuid",
+      [contactId, tenant.id]
+    )).rows[0];
+    if (!contact?.email || !isValidEmail(contact.email) || contact.email_consent !== true) {
+      return { sent: false, reason: "no_valid_email" };
+    }
+    const rendered = renderMessageTemplate({
+      tenant,
+      templateId: "missed_call",
+      contact: { first_name: contact.first_name }
+    });
+    const row = await this.db.query(`
+      insert into messages (
+        tenant_id, contact_id, call_id, channel, direction, body, subject,
+        template_id, delivery_status, scheduled_for
+      ) values ($1::uuid, $2::uuid, $3::uuid, 'email', 'outbound', $4, $5, 'missed_call', 'queued', now())
+      on conflict do nothing
+      returning id::text
+    `, [tenant.id, contactId, callDbId, rendered.body, rendered.subject || null]);
+    return { sent: row.rows.length > 0 };
   }
 }

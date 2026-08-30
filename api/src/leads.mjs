@@ -2,7 +2,7 @@
 // follow-up within minutes if no booking happened, and a ladder afterwards. Exits the moment the
 // contact books. Sources: website form, ManyChat (Instagram / WhatsApp DM), the receptionist, manual.
 import { isQuietTime, nextQuietEnd } from "./time.mjs";
-import { renderMessageTemplate } from "./messaging-templates.mjs";
+import { renderMessageTemplate, emailTypeEnabled } from "./messaging-templates.mjs";
 
 export const LEAD_SOURCES = ["website", "instagram", "whatsapp", "call", "google", "manual"];
 export const LEAD_STATUSES = ["new", "contacted", "qualified", "booked", "lost"];
@@ -20,10 +20,14 @@ export const LEAD_LADDER = [
 export const LEAD_TEMPLATE_IDS = [
   ...new Set([
     ...LEAD_LADDER.map((step) => step.templateId),
+    // single operational email variant (used when the lead is reachable by email)
+    "lead_followup",
     // legacy ladder ids that may still be queued from before the cadence change
     "lead_followup_day_3", "lead_reengage_day_7", "lead_reengage_day_14"
   ])
 ];
+
+const DEFAULT_LEAD_FOLLOWUP_DELAY_MIN = 30;
 
 const clientError = (message) => Object.assign(new Error(message), { statusCode: 400 });
 
@@ -212,7 +216,18 @@ export class LeadService {
       if (!alreadyBooked && channel) {
         await exitLeadSequences(client, tenant.id, contactId, "superseded"); // one active ladder per contact
         const startedAt = this.now();
-        for (const step of LEAD_LADDER) {
+        // Email leads get ONE operational follow-up, not the multi-step ladder.
+        // Other channels (WhatsApp / Instagram DM) keep the existing ladder.
+        let steps = LEAD_LADDER;
+        if (channel === "email") {
+          if (emailTypeEnabled(tenant, "leadFollowup")) {
+            const delayMin = Number(tenant.messaging_config?.email?.leadFollowupDelayMinutes) || DEFAULT_LEAD_FOLLOWUP_DELAY_MIN;
+            steps = [{ templateId: "lead_followup", sequenceType: "lead_follow_up", offsetMs: delayMin * 60_000 }];
+          } else {
+            steps = [];
+          }
+        }
+        for (const step of steps) {
           const dueAt = new Date(startedAt.getTime() + step.offsetMs);
           const fireAt = isQuietTime(dueAt, tenant.timezone, tenant.quiet_hours)
             ? nextQuietEnd(dueAt, tenant.timezone, tenant.quiet_hours)
@@ -223,10 +238,13 @@ export class LeadService {
             appointment: { service: lead.serviceInterest || "" },
             lead
           });
-          await client.query(`
-            insert into messages (tenant_id, contact_id, channel, direction, body, template_id, delivery_status, scheduled_for)
-            values ($1::uuid, $2::uuid, $3, 'outbound', $4, $5, 'queued', $6::timestamptz)
-          `, [tenant.id, contactId, channel, rendered.body, step.templateId, fireAt.toISOString()]);
+          const insertedMessage = await client.query(`
+            insert into messages (tenant_id, contact_id, lead_id, channel, direction, body, subject, template_id, delivery_status, scheduled_for)
+            values ($1::uuid, $2::uuid, $3::uuid, $4, 'outbound', $5, $6, $7, 'queued', $8::timestamptz)
+            on conflict do nothing
+            returning id
+          `, [tenant.id, contactId, leadId, channel, rendered.body, rendered.subject || null, step.templateId, fireAt.toISOString()]);
+          if (!insertedMessage.rows.length) continue;
           await client.query(`
             insert into sequence_runs (tenant_id, contact_id, sequence_type, status, current_step, next_fire_at, metadata)
             values ($1::uuid, $2::uuid, $3, 'active', $4, $5::timestamptz, $6::jsonb)
@@ -234,7 +252,7 @@ export class LeadService {
               JSON.stringify({ channel, leadId, originalDueAt: dueAt.toISOString(), quietHoursDeferred: fireAt.getTime() !== dueAt.getTime() })]);
           scheduled += 1;
         }
-        await client.query(`update leads set status = 'contacted', updated_at = now() where id = $1::uuid`, [leadId]);
+        if (scheduled) await client.query(`update leads set status = 'contacted', updated_at = now() where id = $1::uuid`, [leadId]);
       }
       await client.query(`
         insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload, occurred_at)

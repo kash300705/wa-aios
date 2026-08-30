@@ -21,9 +21,14 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
   const timeline: T[] = [
     ...data.appointments.map((a) => ({ at: a.starts_at, kind: "appointment", text: `${label(a.status)} — ${a.service} with ${a.staff}`, tone: a.status })),
     ...data.calls.map((k) => ({ at: k.started_at, kind: "call", text: `Call (${label(k.outcome || "inquiry")}) — ${k.summary || fmt.dur(k.duration_seconds)}` })),
-    ...data.messages.filter((mm) => mm.direction === "inbound" || mm.delivery_status !== "queued").map((mm) => ({
+    ...data.messages.filter((mm) => mm.direction === "inbound" || (mm.delivery_status !== "queued" && mm.channel !== "email")).map((mm) => ({
       at: mm.sent_at || mm.created_at, kind: "message",
       text: `${mm.direction === "inbound" ? "↙ from customer" : mm.ai_generated ? "↗ AI reply" : "↗ sent"} · ${mm.body.slice(0, 120)}`
+    })),
+    ...(data.emailActivity || []).filter((e) => ["sent", "failed"].includes(e.status)).map((e) => ({
+      at: e.sent_at || e.scheduled_for || e.created_at, kind: "email",
+      text: `✉ ${label(e.email_type)} email ${e.status === "failed" ? "failed" : "sent"}${e.recipient ? ` to ${e.recipient}` : ""}`,
+      tone: e.status === "failed" ? "no_show" : undefined
     })),
     // System notes of kind appointment/call/message just echo rows already shown
     // above — keep only genuine notes and status changes in the timeline.
@@ -115,6 +120,35 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
                 })}
               </div>
             ) : <Empty>No calls.</Empty>}
+          </Card>
+
+          <Card title="Email activity" action={<Link className="btn sm ghost" href="/settings">Email settings →</Link>}>
+            {(data.emailActivity || []).length ? (
+              <div className="call-list">
+                {(data.emailActivity || []).map((e) => (
+                  <details key={e.id} className="call-row" open={e.status === "failed"}>
+                    <summary>
+                      <span className="cr-when">
+                        <span className="cell-strong">{label(e.email_type)}</span>
+                        <span className="cell-sub">{fmt.dateTime(e.sent_at || e.scheduled_for || e.created_at)}</span>
+                      </span>
+                      <Badge value={e.status} />
+                      <span className="cr-summary muted">{e.subject || "—"}</span>
+                    </summary>
+                    <div className="call-detail">
+                      <div className="cd-meta">
+                        <span>To: <span className="mono">{e.recipient || "—"}</span></span>
+                        {e.status === "sent" && e.sent_at ? <span className="muted">Sent {fmt.dateTime(e.sent_at)}</span> : null}
+                        {e.status === "queued" && e.scheduled_for ? <span className="muted">Scheduled {fmt.dateTime(e.scheduled_for)}</span> : null}
+                        {e.provider_message_id ? <span className="muted mono" style={{ fontSize: 11 }}>{e.provider_message_id}</span> : null}
+                      </div>
+                      {e.subject ? <p className="cd-summary">{e.subject}</p> : null}
+                      {e.error ? <p className="cd-summary" style={{ color: "var(--bad-ink)" }}>{e.error}</p> : null}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            ) : <Empty>No emails sent to this customer yet.</Empty>}
           </Card>
         </div>
 

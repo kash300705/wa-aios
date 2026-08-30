@@ -45,34 +45,61 @@ export class NullTransport {
       to: recipient,
       templateId: message.template_id,
       subject: rendered.subject || null,
+      hasHtml: Boolean(rendered.html),
       body: rendered.body
     });
-    return { status: "stubbed", provider: this.provider };
+    return { status: "stubbed", provider: this.provider, recipient: recipient ?? null, subject: rendered.subject ?? null };
   }
 }
 
+/** Resend email. The sending identity is tenant-aware for white-label:
+ *  messaging_config.email.from / .replyTo override the deployment defaults
+ *  (EMAIL_FROM / REPLY_TO_EMAIL, with MAIL_FROM kept as a legacy fallback). */
 export class ResendEmail {
-  constructor({ apiKey, from, fetchImpl = fetch } = {}) {
+  constructor({ apiKey, defaultFrom, defaultReplyTo, fetchImpl = fetch } = {}) {
     if (!apiKey) {
       throw new TransportConfigurationError(
         "Email transport is set to Resend, but RESEND_API_KEY is missing. No fallback transport was used."
       );
     }
-    if (!from) {
-      throw new TransportConfigurationError(
-        "Email transport is set to Resend, but MAIL_FROM is missing. No fallback transport was used."
-      );
-    }
     this.provider = "resend";
     this.apiKey = apiKey;
-    this.from = from;
+    this.defaultFrom = defaultFrom || "";
+    this.defaultReplyTo = defaultReplyTo || "";
     this.fetchImpl = fetchImpl;
+  }
+
+  resolveFrom(tenant) {
+    const emailConfig = tenant?.messaging_config?.email ?? {};
+    const raw = String(emailConfig.from || this.defaultFrom || "").trim();
+    if (!raw) {
+      throw new TransportConfigurationError(
+        "Resend is selected but no sender address is configured. Set EMAIL_FROM on the API "
+        + "(or messaging_config.email.from for this tenant) to a verified Resend domain address."
+      );
+    }
+    if (raw.includes("<")) return raw;
+    const senderName = emailConfig.senderName || tenant?.messaging_config?.senderName || tenant?.name;
+    return senderName ? `${senderName} <${raw}>` : raw;
+  }
+
+  resolveReplyTo(tenant) {
+    const emailConfig = tenant?.messaging_config?.email ?? {};
+    return String(emailConfig.replyTo || this.defaultReplyTo || tenant?.contact_config?.email || "").trim() || null;
   }
 
   async send({ message, recipient, rendered, tenant }) {
     if (!recipient) throw new Error(`Message ${message.id} has no email recipient.`);
-    const senderName = tenant.messaging_config?.senderName || tenant.name;
-    const from = senderName && !this.from.includes("<") ? `${senderName} <${this.from}>` : this.from;
+    const from = this.resolveFrom(tenant);
+    const replyTo = this.resolveReplyTo(tenant);
+    const payload = {
+      from,
+      to: [recipient],
+      subject: rendered.subject || "Message from your salon",
+      text: rendered.body
+    };
+    if (rendered.html) payload.html = rendered.html;
+    if (replyTo) payload.reply_to = replyTo;
     const response = await this.fetchImpl("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -80,19 +107,20 @@ export class ResendEmail {
         "content-type": "application/json",
         "idempotency-key": `wa-aios-message-${message.id}`
       },
-      body: JSON.stringify({
-        from,
-        to: [recipient],
-        subject: rendered.subject || "Message from your salon",
-        text: rendered.body
-      })
+      body: JSON.stringify(payload)
     });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(`Resend API ${response.status}: ${detail || response.statusText}`);
     }
     const result = await response.json();
-    return { status: "sent", provider: this.provider, providerMessageId: result.id ?? null };
+    return {
+      status: "sent",
+      provider: this.provider,
+      providerMessageId: result.id ?? null,
+      recipient,
+      subject: payload.subject
+    };
   }
 }
 
@@ -176,7 +204,8 @@ export class ChannelTransport {
       }
       return new ResendEmail({
         apiKey: this.env.RESEND_API_KEY,
-        from: this.env.MAIL_FROM,
+        defaultFrom: this.env.EMAIL_FROM || this.env.MAIL_FROM,
+        defaultReplyTo: this.env.REPLY_TO_EMAIL,
         fetchImpl: this.fetchImpl
       });
     }

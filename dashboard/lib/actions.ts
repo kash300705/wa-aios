@@ -90,6 +90,20 @@ export async function updateSettings(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function updateEmailAutomation(formData: FormData) {
+  const keys = ["confirmation", "reminder24h", "reminder2h", "rescheduled", "cancelled", "missedCall", "leadFollowup", "completion"];
+  const emailAutomation: Record<string, unknown> = {};
+  for (const k of keys) emailAutomation[k] = formData.get(`email_${k}`) === "on";
+  const delay = formData.get("leadFollowupDelayMinutes");
+  if (delay) emailAutomation.leadFollowupDelayMinutes = Number(delay);
+  for (const k of ["from", "replyTo", "senderName"]) {
+    const v = formData.get(k);
+    if (v !== null) emailAutomation[k] = String(v).trim();
+  }
+  await post("settings-update", { emailAutomation });
+  revalidatePath("/settings");
+}
+
 export async function createCampaign(formData: FormData) {
   const body = {
     name: String(formData.get("name") || "Untitled campaign"),

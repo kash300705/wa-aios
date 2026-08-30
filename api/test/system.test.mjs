@@ -221,15 +221,15 @@ test("Retell webhook: a valid X-Retell-Signature is accepted, a bad one is 401",
 
 test("Inbound message stops the follow-up ladder the moment the customer replies", async () => {
   const lead = await webhook("lead", { source: "website", name: "Marco Bianchi", email: "marco@example.ch", phone: "+41794440501", serviceInterest: "Balayage" });
-  assert.equal(lead.followUpsScheduled, 5);
+  assert.equal(lead.followUpsScheduled, 1, "email leads get a single operational follow-up");
   const queuedBefore = (await q(
     `select count(*)::int as n from messages where contact_id = $1::uuid and delivery_status = 'queued'`, [lead.contactId]
   )).rows[0].n;
-  assert.ok(queuedBefore >= 4);
+  assert.ok(queuedBefore >= 1);
 
   const reply = await webhook("inbound-message", { channel: "email", email: "marco@example.ch", text: "Yes, do you have anything Friday afternoon?" });
   assert.equal(reply.handled, true);
-  assert.ok(reply.sequencesStopped >= 3, "queued ladder messages were cancelled");
+  assert.ok(reply.sequencesStopped >= 1, "the queued follow-up was cancelled on reply");
   assert.equal(reply.aiReplied, true);
 
   const queuedAfter = (await q(

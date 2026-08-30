@@ -3,6 +3,8 @@
 // Writes: POST, same token. Tenancy is enforced by row-level security — every
 // query runs with app.current_tenant_id set to the resolved tenant.
 
+import { emailAutomationHealth } from "./email-health.mjs";
+
 const clamp = (n, lo, hi, d) => {
   if (n === null || n === undefined || n === "") return d;
   const v = Number(n);
@@ -169,7 +171,7 @@ export class DashboardApi {
       from contacts c where c.tenant_id = $1::uuid and c.id = $2::uuid`, [tenantId, id])).rows[0];
     if (!contact) return { error: "not_found" };
     delete contact.tenant_id;
-    const [appointments, calls, messages, notes, leads, sequences] = await Promise.all([
+    const [appointments, calls, messages, notes, leads, sequences, emailActivity] = await Promise.all([
       this.db.query(`
         select id::text, status, status_source, starts_at, ends_at, service, value_chf::float8, staff, lead_source, booked_via
         from appointments where tenant_id = $1::uuid and contact_id = $2::uuid order by starts_at desc limit 50`, [tenantId, id]),
@@ -189,7 +191,13 @@ export class DashboardApi {
         from leads where tenant_id = $1::uuid and contact_id = $2::uuid order by created_at desc`, [tenantId, id]),
       this.db.query(`
         select id::text, sequence_type, status, current_step, next_fire_at, exit_reason, started_at
-        from sequence_runs where tenant_id = $1::uuid and contact_id = $2::uuid order by started_at desc limit 30`, [tenantId, id])
+        from sequence_runs where tenant_id = $1::uuid and contact_id = $2::uuid order by started_at desc limit 30`, [tenantId, id]),
+      this.db.query(`
+        select id::text, email_type, recipient, subject, status, provider_message_id, error,
+               scheduled_for, sent_at, created_at, appointment_id::text, call_id::text, lead_id::text
+        from email_events
+        where tenant_id = $1::uuid and contact_id = $2::uuid
+        order by coalesce(sent_at, scheduled_for, created_at) desc limit 40`, [tenantId, id])
     ]);
     return {
       contact,
@@ -198,7 +206,8 @@ export class DashboardApi {
       messages: messages.rows,
       notes: notes.rows,
       leads: leads.rows,
-      sequences: sequences.rows
+      sequences: sequences.rows,
+      emailActivity: emailActivity.rows
     };
   }
 
@@ -309,6 +318,11 @@ export class DashboardApi {
   // ---- SETTINGS -----------------------------------------------
   async settings(tenantId) {
     const tenant = await this.tenantRow(tenantId);
+    const env = this.services?.booking?.env ?? process.env;
+    let emailAutomation = { status: "unknown", provider: "resend" };
+    try {
+      emailAutomation = await emailAutomationHealth(this.db, env, tenantId);
+    } catch { /* settings must still load */ }
     return {
       tenant: {
         id: tenant.id, slug: tenant.slug, name: tenant.name, legalName: tenant.legal_name,
@@ -317,7 +331,8 @@ export class DashboardApi {
         quietHours: tenant.quiet_hours, review: tenant.review_config, messaging: tenant.messaging_config,
         booking: tenant.adapter_config, services: tenant.services, retellAgentId: tenant.retell_agent_id,
         avgAppointmentValueChf: tenant.avg_appointment_value_chf
-      }
+      },
+      emailAutomation
     };
   }
 
@@ -406,6 +421,21 @@ export class DashboardApi {
     }
     if (body.name) { params.push(String(body.name).slice(0, 120)); sets.push(`name = $${params.length}`); }
     if (body.avgAppointmentValueChf != null) { params.push(Number(body.avgAppointmentValueChf)); sets.push(`avg_appointment_value_chf = $${params.length}::numeric`); }
+    // Targeted merge into messaging_config.email so per-email-type toggles don't
+    // clobber senderName / templates / mode / other messaging config.
+    if (body.emailAutomation && typeof body.emailAutomation === "object" && body.messaging === undefined) {
+      const clean = {};
+      const boolKeys = ["confirmation", "reminder24h", "reminder2h", "reminder48h", "rescheduled", "cancelled", "missedCall", "leadFollowup", "completion"];
+      for (const k of boolKeys) if (typeof body.emailAutomation[k] === "boolean") clean[k] = body.emailAutomation[k];
+      if (body.emailAutomation.leadFollowupDelayMinutes != null) {
+        clean.leadFollowupDelayMinutes = clamp(body.emailAutomation.leadFollowupDelayMinutes, 1, 10080, 30);
+      }
+      if (typeof body.emailAutomation.from === "string") clean.from = body.emailAutomation.from.slice(0, 200);
+      if (typeof body.emailAutomation.replyTo === "string") clean.replyTo = body.emailAutomation.replyTo.slice(0, 200);
+      if (typeof body.emailAutomation.senderName === "string") clean.senderName = body.emailAutomation.senderName.slice(0, 120);
+      params.push(JSON.stringify(clean));
+      sets.push(`messaging_config = jsonb_set(coalesce(messaging_config, '{}'::jsonb), '{email}', coalesce(messaging_config->'email', '{}'::jsonb) || $${params.length}::jsonb, true)`);
+    }
     if (!sets.length) return { updated: false };
     await this.db.query(
       `update tenants set ${sets.join(", ")}, updated_at = now() where id = $1::uuid`, params

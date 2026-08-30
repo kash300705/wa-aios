@@ -10,7 +10,7 @@ import {
   zonedParts
 } from "./time.mjs";
 import { DEFAULT_TENANT_ID, jsonValue } from "./database.mjs";
-import { renderMessageTemplate } from "./messaging-templates.mjs";
+import { renderMessageTemplate, emailTypeEnabled } from "./messaging-templates.mjs";
 import { markLeadBooked } from "./leads.mjs";
 
 const isoWithZone = /(?:Z|[+-]\d{2}:\d{2})$/i;
@@ -189,38 +189,48 @@ async function queueMessage(client, {
   tenant,
   contactId = null,
   appointmentId = null,
+  callId = null,
+  leadId = null,
   channel,
   templateId,
   scheduledFor,
   contact = {},
   appointment = {},
   complaint = {},
-  bodyPrefix = ""
+  lead = {},
+  bodyPrefix = "",
+  onConflictDoNothing = false
 }) {
-  const rendered = renderMessageTemplate({ tenant, templateId, contact, appointment, complaint });
-  await client.query(`
+  const rendered = renderMessageTemplate({ tenant, templateId, contact, appointment, complaint, lead });
+  const inserted = await client.query(`
     insert into messages (
-      tenant_id, contact_id, appointment_id, channel, direction, body,
+      tenant_id, contact_id, appointment_id, call_id, lead_id, channel, direction, body, subject,
       template_id, delivery_status, scheduled_for
-    ) values ($1::uuid, $2::uuid, $3::uuid, $4, 'outbound', $5, $6, 'queued', $7::timestamptz)
+    ) values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'outbound', $7, $8, $9, 'queued', $10::timestamptz)
+    ${onConflictDoNothing ? "on conflict do nothing" : ""}
+    returning id::text
   `, [
     tenant.id,
     contactId,
     appointmentId,
+    callId,
+    leadId,
     channel,
     `${bodyPrefix}${rendered.body}`,
+    rendered.subject || null,
     templateId,
     new Date(scheduledFor).toISOString()
   ]);
-  return rendered;
+  return { rendered, messageId: inserted.rows[0]?.id ?? null, inserted: inserted.rows.length > 0 };
 }
 
 // Immediate booking confirmation. Email when we have one (it carries the most
 // detail), WhatsApp otherwise. Queued for "now" so the dispatcher sends it on
 // its next cycle — subject to the same consent and quiet-hours rules.
 async function scheduleConfirmation(client, tenant, appointment, { channel } = {}) {
+  if (!emailTypeEnabled(tenant, "confirmation")) return;
   const useChannel = channel || (appointment.contact_email ? "email" : "whatsapp");
-  await queueMessage(client, {
+  const { inserted } = await queueMessage(client, {
     tenant,
     contactId: appointment.contact_id,
     appointmentId: appointment.id,
@@ -228,12 +238,50 @@ async function scheduleConfirmation(client, tenant, appointment, { channel } = {
     templateId: "appointment_confirmation",
     scheduledFor: new Date(),
     contact: { first_name: appointment.contact_first_name },
-    appointment
+    appointment,
+    onConflictDoNothing: true
   });
+  if (!inserted) return;
   await client.query(`
     insert into sequence_runs (tenant_id, contact_id, appointment_id, sequence_type, status, current_step, next_fire_at, metadata)
     values ($1::uuid, $2::uuid, $3::uuid, 'appointment_confirmation', 'completed', 'appointment_confirmation', null, $4::jsonb)
   `, [tenant.id, appointment.contact_id, appointment.id, JSON.stringify({ channel: useChannel })]);
+}
+
+// Immediate "your appointment has moved" / "your appointment is cancelled"
+// emails. Both are queued inside the reschedule / cancel DB transaction, only
+// after the calendar + DB change is verified, and are idempotent per
+// (appointment_id, template_id).
+async function scheduleRescheduleConfirmation(client, tenant, appointment) {
+  if (!emailTypeEnabled(tenant, "rescheduled")) return;
+  const useChannel = appointment.contact_email ? "email" : "whatsapp";
+  await queueMessage(client, {
+    tenant,
+    contactId: appointment.contact_id,
+    appointmentId: appointment.id,
+    channel: useChannel,
+    templateId: "appointment_rescheduled",
+    scheduledFor: new Date(),
+    contact: { first_name: appointment.contact_first_name },
+    appointment,
+    onConflictDoNothing: true
+  });
+}
+
+async function scheduleCancellationConfirmation(client, tenant, appointment) {
+  if (!emailTypeEnabled(tenant, "cancelled")) return;
+  const useChannel = appointment.contact_email ? "email" : "whatsapp";
+  await queueMessage(client, {
+    tenant,
+    contactId: appointment.contact_id,
+    appointmentId: appointment.id,
+    channel: useChannel,
+    templateId: "appointment_cancelled",
+    scheduledFor: new Date(),
+    contact: { first_name: appointment.contact_first_name },
+    appointment,
+    onConflictDoNothing: true
+  });
 }
 
 // Post-visit thank-you, queued for the appointment end time. The completion
@@ -258,12 +306,13 @@ async function scheduleCompletionMessage(client, tenant, appointment) {
 
 async function scheduleReminders(client, tenant, appointment) {
   const plans = [
-    { templateId: "appointment_t_48h", channel: "whatsapp", hours: 48 },
-    { templateId: "appointment_t_24h", channel: "email", hours: 24 },
-    { templateId: "appointment_t_2h", channel: "whatsapp", hours: 2 }
+    { templateId: "appointment_t_48h", channel: "whatsapp", hours: 48, enabledKey: "reminder48h" },
+    { templateId: "appointment_t_24h", channel: "email", hours: 24, enabledKey: "reminder24h" },
+    { templateId: "appointment_t_2h", channel: "whatsapp", hours: 2, enabledKey: "reminder2h" }
   ];
 
   for (const plan of plans) {
+    if (!emailTypeEnabled(tenant, plan.enabledKey)) continue;
     const dueAt = new Date(new Date(appointment.starts_at).getTime() - plan.hours * 3_600_000);
     const quiet = isQuietTime(dueAt, tenant.timezone, tenant.quiet_hours);
     const dropped = quiet && plan.templateId === "appointment_t_2h";
@@ -276,10 +325,11 @@ async function scheduleReminders(client, tenant, appointment) {
       });
       await client.query(`
         insert into messages (
-          tenant_id, contact_id, appointment_id, channel, direction, body,
+          tenant_id, contact_id, appointment_id, channel, direction, body, subject,
           template_id, delivery_status, scheduled_for
-        ) values ($1::uuid, $2::uuid, $3::uuid, $4, 'outbound', $5, $6, 'dropped_quiet_hours', $7::timestamptz)
-      `, [tenant.id, appointment.contact_id, appointment.id, plan.channel, rendered.body, plan.templateId, dueAt.toISOString()]);
+        ) values ($1::uuid, $2::uuid, $3::uuid, $4, 'outbound', $5, $6, $7, 'dropped_quiet_hours', $8::timestamptz)
+        on conflict do nothing
+      `, [tenant.id, appointment.contact_id, appointment.id, plan.channel, rendered.body, rendered.subject || null, plan.templateId, dueAt.toISOString()]);
     } else {
       await queueMessage(client, {
         tenant,
@@ -289,7 +339,8 @@ async function scheduleReminders(client, tenant, appointment) {
         templateId: plan.templateId,
         scheduledFor: dueAt,
         contact: { first_name: appointment.contact_first_name },
-        appointment
+        appointment,
+        onConflictDoNothing: true
       });
     }
 
@@ -722,7 +773,8 @@ export class BookingService {
       return { status: "not_found", message: "I could not find that future booked appointment." };
     }
     const existingResult = await this.db.query(`
-      select a.*, a.id::text as id, a.contact_id::text as contact_id, c.first_name as contact_first_name
+      select a.*, a.id::text as id, a.contact_id::text as contact_id,
+             c.first_name as contact_first_name, c.email as contact_email
       from appointments a
       join contacts c on c.id = a.contact_id
       where a.tenant_id = $1::uuid and a.id = $2::uuid and a.status = 'booked' and a.starts_at > now()
@@ -783,9 +835,15 @@ export class BookingService {
           returning *, id::text as id, contact_id::text as contact_id
         `, [existing.id, start.toISOString(), end.toISOString()]);
         const updated = updatedResult.rows[0];
+        const updatedForMessaging = {
+          ...updated,
+          contact_first_name: existing.contact_first_name,
+          contact_email: existing.contact_email || null
+        };
         await invalidateReminders(tx, existing.id, "rescheduled");
-        await scheduleReminders(tx, tenant, { ...updated, contact_first_name: existing.contact_first_name });
-        await scheduleCompletionMessage(tx, tenant, { ...updated, contact_first_name: existing.contact_first_name });
+        await scheduleReminders(tx, tenant, updatedForMessaging);
+        await scheduleCompletionMessage(tx, tenant, updatedForMessaging);
+        await scheduleRescheduleConfirmation(tx, tenant, updatedForMessaging);
         await tx.query(`
           insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)
           values ($1::uuid, 'appointment', $2::uuid, 'appointment.rescheduled', 'api.booking', $3::jsonb)
@@ -833,9 +891,11 @@ export class BookingService {
     try {
       const outcome = await this.db.transaction(async (tx) => {
         const result = await tx.query(`
-          select *, id::text as id, contact_id::text as contact_id
-          from appointments
-          where tenant_id = $1::uuid and id = $2::uuid and status = 'booked' and starts_at > now()
+          select a.*, a.id::text as id, a.contact_id::text as contact_id,
+                 c.first_name as contact_first_name, c.email as contact_email
+          from appointments a
+          join contacts c on c.id = a.contact_id
+          where a.tenant_id = $1::uuid and a.id = $2::uuid and a.status = 'booked' and a.starts_at > now()
         `, [tenant.id, body.appointmentId ?? null]);
         if (!result.rows.length) return { notFound: true };
         existing = result.rows[0];
@@ -849,6 +909,16 @@ export class BookingService {
           update appointments set status = 'cancelled', status_source = 'workflow' where id = $1::uuid
         `, [existing.id]);
         await invalidateReminders(tx, existing.id, "cancelled");
+        await scheduleCancellationConfirmation(tx, tenant, {
+          id: existing.id,
+          contact_id: existing.contact_id,
+          contact_first_name: existing.contact_first_name,
+          contact_email: existing.contact_email || null,
+          starts_at: existing.starts_at,
+          ends_at: existing.ends_at,
+          service: existing.service,
+          staff: existing.staff
+        });
         await tx.query(`
           insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)
           values ($1::uuid, 'appointment', $2::uuid, 'appointment.cancelled', 'api.booking', $3::jsonb)

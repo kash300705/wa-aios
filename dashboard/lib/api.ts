@@ -84,7 +84,7 @@ export type Funnel = { status: string; count: number }[];
 export type Customer = { id: string; first_name: string; last_name: string | null; email: string | null; phone_e164: string | null; manychat_subscriber_id: string | null; lifecycle_stage: string; last_interaction_at: string | null; last_interaction_kind: string | null; last_booked_at: string | null; first_booked_at: string | null; total_bookings: number; completed_bookings: number; no_show_count: number; lifetime_value_chf: number; tags: string[]; marketing_opt_out: boolean; source: string; created_at: string; lead_status: string | null; upcoming: number };
 export type Segment = { lifecycle_stage: string; count: number };
 export type Conversation = { id: string; channel: string; status: string; ai_enabled: boolean; last_message_at: string | null; last_direction: string | null; unread_count: number; contact_id: string; first_name: string; last_name: string | null; phone_e164: string | null; email: string | null; last_body?: string | null };
-export type ConversationMessage = { id: string; direction: string; body: string; template_id: string | null; ai_generated: boolean; delivery_status: string; created_at: string; sent_at: string | null; scheduled_for: string | null };
+export type ConversationMessage = { id: string; channel?: string; direction: string; body: string; template_id: string | null; ai_generated: boolean; delivery_status: string; created_at: string; sent_at: string | null; scheduled_for: string | null };
 export type SequenceRun = { id: string; sequence_type: string; current_step: string; status: string; next_fire_at: string | null; started_at: string; exit_reason?: string | null; contact_id: string; first_name: string; last_name: string | null; phone_e164: string | null; email: string | null };
 export type QueuedMessage = { id: string; channel: string; template_id: string | null; body: string; scheduled_for: string; contact_id: string; first_name: string; last_name: string | null };
 export type Campaign = { id: string; name: string; status: string; channel: string; criteria: Record<string, unknown>; offer: string | null; goal: string | null; message_style: string; daily_send_cap: number; total_targeted: number; messages_sent: number; responses: number; bookings: number; launched_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
@@ -126,12 +126,24 @@ export async function getLeads(status?: string) {
 }
 export const getCustomers = (params: { stage?: string; q?: string } = {}) => apiGet<{ customers: Customer[]; segments: Segment[] }>("customers", { ...params, limit: 300 });
 export type CustomerCall = { id: string; retell_call_id: string; started_at: string; ended_at: string | null; duration_seconds: number; outcome: string | null; direction: string; answered: boolean; summary: string | null; recording_url: string | null; transcript: string | null; sentiment: string | null; user_sentiment: string | null; disclosure_played: boolean; from_number: string | null; appointment_id: string | null };
-export const getCustomer = (id: string) => apiGet<{ contact: Record<string, unknown>; appointments: Appointment[]; calls: CustomerCall[]; messages: ConversationMessage[]; notes: { id: string; author: string; kind: string; body: string; pinned: boolean; metadata: Record<string, unknown>; created_at: string }[]; leads: Lead[]; sequences: SequenceRun[]; error?: string }>("customer", { id });
+export type EmailEvent = {
+  id: string; email_type: string; recipient: string | null; subject: string | null;
+  status: string; provider_message_id: string | null; error: string | null;
+  scheduled_for: string | null; sent_at: string | null; created_at: string;
+  appointment_id: string | null; call_id: string | null; lead_id: string | null;
+};
+export const getCustomer = (id: string) => apiGet<{ contact: Record<string, unknown>; appointments: Appointment[]; calls: CustomerCall[]; messages: ConversationMessage[]; notes: { id: string; author: string; kind: string; body: string; pinned: boolean; metadata: Record<string, unknown>; created_at: string }[]; leads: Lead[]; sequences: SequenceRun[]; emailActivity: EmailEvent[]; error?: string }>("customer", { id });
 export const getConversations = (status?: string) => apiGet<{ conversations: Conversation[] }>("conversations", { status });
 export const getConversation = (id: string) => apiGet<{ conversation: Conversation & { lifecycle_stage: string; total_bookings: number }; messages: ConversationMessage[]; error?: string }>("conversation", { id });
 export const getFollowups = () => apiGet<{ active: SequenceRun[]; upcoming: QueuedMessage[]; summary: { sequence_type: string; active: number; completed: number; exited: number }[]; outbound30: { delivery_status: string; count: number }[] }>("followups");
 export const getReactivation = () => apiGet<{ campaigns: Campaign[] }>("reactivation");
 export const getCampaign = (id: string) => apiGet<{ campaign: Campaign; targets: CampaignTarget[]; error?: string }>("reactivation-campaign", { id });
 export const getAnalytics = (days = 90) => apiGet<{ days: number; series: AnalyticsPoint[]; bySource: { source: string; leads: number; booked: number }[]; totals: Record<string, number> }>("analytics", { days });
-export const getSettings = () => apiGet<{ tenant: Record<string, unknown> }>("settings");
+export type EmailAutomation = {
+  status: "connected" | "not_configured" | "error" | "unknown";
+  detail?: string; provider: string; from: string | null; replyTo: string | null;
+  apiKeyPresent?: boolean;
+  recent?: { failed: number; sent: number; queued: number; total: number };
+};
+export const getSettings = () => apiGet<{ tenant: Record<string, unknown>; emailAutomation?: EmailAutomation }>("settings");
 export const getTenants = () => apiGet<{ tenants: { id: string; slug: string; name: string; locale: string; timezone: string; upcoming: number }[] }>("tenants");
