@@ -30,18 +30,67 @@ export function Card({ title, sub, action, children, className = "" }: { title?:
   );
 }
 
-export function Stat({ k, v, foot, delta }: { k: ReactNode; v: ReactNode; foot?: ReactNode; delta?: { value: number; suffix?: string } }) {
-  return (
-    <section className="card stat">
+export function Stat({ k, v, foot, delta, icon, tone }: {
+  k: ReactNode; v: ReactNode; foot?: ReactNode;
+  delta?: { value: number; suffix?: string };
+  icon?: ReactNode; tone?: "lav" | "mint" | "blue" | "warm";
+}) {
+  const body = (
+    <>
       <span className="k">{k}</span>
       <span className="v">{v}</span>
       {delta !== undefined ? (
         <span className={`delta ${delta.value >= 0 ? "up" : "down"}`}>
-          {delta.value >= 0 ? "▲" : "▼"} {fmt.pct(Math.abs(delta.value), 1)}{delta.suffix ? ` ${delta.suffix}` : ""}
+          {delta.value >= 0 ? "↑" : "↓"} {fmt.pct(Math.abs(delta.value), 1)}{delta.suffix ? ` ${delta.suffix}` : ""}
         </span>
       ) : null}
       {foot ? <span className="foot">{foot}</span> : null}
-    </section>
+    </>
+  );
+  if (icon) {
+    return (
+      <section className="card stat kpi">
+        <div className="kpi-top">
+          <span className="k">{k}</span>
+          <span className={`kpi-icon ${tone ?? ""}`}>{icon}</span>
+        </div>
+        <span className="v">{v}</span>
+        {delta !== undefined ? (
+          <span className={`delta ${delta.value >= 0 ? "up" : "down"}`}>
+            {delta.value >= 0 ? "↑" : "↓"} {fmt.pct(Math.abs(delta.value), 1)}{delta.suffix ? ` ${delta.suffix}` : ""}
+          </span>
+        ) : null}
+        {foot ? <span className="foot">{foot}</span> : null}
+      </section>
+    );
+  }
+  return <section className="card stat">{body}</section>;
+}
+
+const DIST_COLORS = ["var(--brand)", "var(--accent)", "var(--blue-ink)", "var(--warn-ink)", "var(--muted-2)"];
+
+/** Horizontal stacked distribution (e.g. call outcomes) — calm, no donut chrome. */
+export function Distribution({ items }: { items: { label: string; value: number }[] }) {
+  const total = items.reduce((n, i) => n + i.value, 0) || 1;
+  const shown = items.filter((i) => i.value > 0);
+  if (!shown.length) return <div className="empty">No data yet.</div>;
+  return (
+    <div>
+      <div className="dist-bar">
+        {shown.map((i, idx) => (
+          <span key={i.label} style={{ width: `${(i.value / total) * 100}%`, background: DIST_COLORS[idx % DIST_COLORS.length] }} />
+        ))}
+      </div>
+      <div className="dist" style={{ marginTop: 14 }}>
+        {shown.map((i, idx) => (
+          <div className="d" key={i.label}>
+            <span className="swatch" style={{ background: DIST_COLORS[idx % DIST_COLORS.length] }} />
+            <span>{i.label}</span>
+            <span><span className="d-val">{fmt.int(i.value)}</span><span className="d-pct">{fmt.pct((i.value / total) * 100)}</span></span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -100,7 +149,7 @@ export function AreaChart({ points, height = 150, valueFormat = (n: number) => S
     <svg className="chart" viewBox={`0 0 ${w} ${height}`} role="img" aria-label="trend">
       <defs>
         <linearGradient id="areaGrad" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="var(--brand)" stopOpacity="0.28" />
+          <stop offset="0%" stopColor="var(--brand)" stopOpacity="0.16" />
           <stop offset="100%" stopColor="var(--brand)" stopOpacity="0" />
         </linearGradient>
       </defs>

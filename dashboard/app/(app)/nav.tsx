@@ -16,36 +16,61 @@ const ICONS: Record<string, string> = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM4 12l-1.5 2 1 2M20 12l1.5 2-1 2M12 4V2M12 22v-2"
 };
 
-const ITEMS = [
-  ["overview", "/", "Overview"],
-  ["inbox", "/inbox", "Inbox"],
-  ["calls", "/calls", "Calls"],
-  ["customers", "/customers", "Customers"],
-  ["leads", "/leads", "Leads"],
-  ["appointments", "/appointments", "Appointments"],
-  ["followups", "/followups", "Follow-ups"],
-  ["reactivation", "/reactivation", "Reactivation"],
-  ["analytics", "/analytics", "Analytics"],
-  ["settings", "/settings", "Settings"]
-] as const;
+type Item = readonly [key: string, href: string, label: string];
+
+const GROUPS: { label: string; items: Item[] }[] = [
+  {
+    label: "Workspace",
+    items: [
+      ["overview", "/", "Dashboard"],
+      ["inbox", "/inbox", "Inbox"],
+      ["calls", "/calls", "Calls"]
+    ]
+  },
+  {
+    label: "Clients",
+    items: [
+      ["customers", "/customers", "Customers"],
+      ["leads", "/leads", "Leads"],
+      ["appointments", "/appointments", "Appointments"]
+    ]
+  },
+  {
+    label: "Growth",
+    items: [
+      ["followups", "/followups", "Follow-ups"],
+      ["reactivation", "/reactivation", "Reactivation"],
+      ["analytics", "/analytics", "Analytics"]
+    ]
+  },
+  {
+    label: "Configure",
+    items: [["settings", "/settings", "Settings"]]
+  }
+];
 
 export function Nav({ counts }: { counts: Record<string, number> }) {
   const path = usePathname();
   return (
     <nav className="nav" aria-label="Primary">
-      {ITEMS.map(([key, href, labelText]) => {
-        const active = href === "/" ? path === "/" : path.startsWith(href);
-        const count = counts[key];
-        return (
-          <Link key={href} href={href} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>
-            <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <path d={ICONS[key]} />
-            </svg>
-            {labelText}
-            {count ? <span className={`count ${key === "inbox" && count ? "alert" : ""}`}>{count}</span> : null}
-          </Link>
-        );
-      })}
+      {GROUPS.map((group) => (
+        <div className="nav-group" key={group.label}>
+          <div className="nav-group-label">{group.label}</div>
+          {group.items.map(([key, href, labelText]) => {
+            const active = href === "/" ? path === "/" : path.startsWith(href);
+            const count = counts[key];
+            return (
+              <Link key={href} href={href} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d={ICONS[key]} />
+                </svg>
+                {labelText}
+                {count ? <span className={`count ${key === "inbox" ? "alert" : ""}`}>{count}</span> : null}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </nav>
   );
 }
