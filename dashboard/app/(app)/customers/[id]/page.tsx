@@ -25,7 +25,11 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
       at: mm.sent_at || mm.created_at, kind: "message",
       text: `${mm.direction === "inbound" ? "↙ from customer" : mm.ai_generated ? "↗ AI reply" : "↗ sent"} · ${mm.body.slice(0, 120)}`
     })),
-    ...data.notes.map((n) => ({ at: n.created_at, kind: "note", text: `${n.author === "staff" ? "Note" : label(n.kind)} — ${n.body}` }))
+    // System notes of kind appointment/call/message just echo rows already shown
+    // above — keep only genuine notes and status changes in the timeline.
+    ...data.notes
+      .filter((n) => n.author === "staff" || ["note", "status", "reactivation", "lead"].includes(n.kind))
+      .map((n) => ({ at: n.created_at, kind: "note", text: `${n.author === "staff" ? "Note" : label(n.kind)} — ${n.body}` }))
   ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, 40);
 
   return (
