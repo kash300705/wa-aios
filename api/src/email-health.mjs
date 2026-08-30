@@ -35,6 +35,7 @@ export async function emailAutomationHealth(db, env = process.env, tenantId) {
   if (!cfg.configured) return { status: "not_configured", detail: cfg.reason, ...base };
 
   let recent = { failed: 0, sent: 0, queued: 0, total: 0 };
+  let lastError = null;
   if (db && tenantId) {
     try {
       recent = (await db.query(`
@@ -47,14 +48,23 @@ export async function emailAutomationHealth(db, env = process.env, tenantId) {
         where tenant_id = $1::uuid and channel = 'email'
           and created_at > now() - interval '24 hours'
       `, [tenantId])).rows[0] || recent;
+      lastError = (await db.query(`
+        select last_error from messages
+        where tenant_id = $1::uuid and channel = 'email' and delivery_status = 'failed' and last_error is not null
+        order by created_at desc limit 1
+      `, [tenantId])).rows[0]?.last_error || null;
     } catch { /* health must never throw */ }
   }
 
-  const status = recent.total >= 3 && recent.sent === 0 && recent.failed === recent.total
-    ? "error"
-    : "connected";
-  const detail = status === "error"
-    ? `${recent.failed} email(s) failed in the last 24h and none were sent`
-    : undefined;
+  // A verification / auth failure means the config is wrong even if only one
+  // email has been attempted.
+  const configError = lastError && /not verified|forbidden|unauthorized|invalid.*api.*key|403|401/i.test(lastError);
+  const deliveryDead = recent.total >= 3 && recent.sent === 0 && recent.failed === recent.total;
+  const status = (configError || deliveryDead) ? "error" : "connected";
+  const detail = configError
+    ? `Last send failed: ${String(lastError).slice(0, 200)}`
+    : deliveryDead
+      ? `${recent.failed} email(s) failed in the last 24h and none were sent`
+      : undefined;
   return { status, detail, recent, ...base };
 }
