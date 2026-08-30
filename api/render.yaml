@@ -47,12 +47,22 @@ services:
         sync: false
       - key: MESSAGE_TRANSPORT_INSTAGRAM
         value: manychat
-      # Real customer email (confirmations, reminders, follow-ups, reactivation).
-      # Create a Resend API key + verify the sending domain, then set both here.
+      # Real customer email (confirmations, reminders, reschedule/cancel,
+      # missed-call + lead follow-ups). Verify a sending domain in Resend, then
+      # set RESEND_API_KEY + EMAIL_FROM (+ optional REPLY_TO_EMAIL) below.
+      # Until all three are set, /health reports emailAutomation:"not_configured"
+      # and email sends fail-and-log without affecting bookings.
       - key: MESSAGE_TRANSPORT_EMAIL
         value: resend
       - key: RESEND_API_KEY
         sync: false
+      # EMAIL_FROM: "Salon Name <bookings@your-verified-domain>". Per-salon
+      # overrides live in tenants.messaging_config.email.from (dashboard Settings).
+      - key: EMAIL_FROM
+        sync: false
+      - key: REPLY_TO_EMAIL
+        sync: false
+      # MAIL_FROM: legacy fallback for EMAIL_FROM. Kept for back-compat.
       - key: MAIL_FROM
         sync: false
       # Conversational AI for inbound replies and reactivation copy. Optional:
