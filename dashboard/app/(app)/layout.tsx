@@ -1,10 +1,11 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { authRequired, isAuthenticated } from "../../lib/auth";
 import { connected, getOverview, getTenants, source } from "../../lib/api";
 import { switchTenant } from "../../lib/actions";
 import { Nav } from "./nav";
+import { ThemeToggle } from "./theme-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -13,11 +14,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   let tenantName = "Salon";
   let counts: Record<string, number> = {};
-  const brand: { primary?: string; accent?: string } = {};
   try {
     const o = await getOverview();
     tenantName = o.tenant?.name || tenantName;
-    Object.assign(brand, o.tenant?.branding || {});
     counts = {
       inbox: o.live.conversations_need_human || 0,
       leads: o.live.open_leads || 0,
@@ -33,15 +32,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     try { tenants = (await getTenants()).tenants; } catch { /* ignore */ }
   }
 
-  const style = {
-    "--brand": brand.primary || "#6aa6ff",
-    "--accent": brand.accent || "#7cf2c8"
-  } as CSSProperties;
-
   const initials = (tenantName.match(/\b[A-Za-z]/g) || ["A"]).join("").slice(0, 2).toUpperCase();
 
   return (
-    <div className="shell" style={style}>
+    <div className="shell">
       <aside className="sidebar">
         <Link href="/" className="brand">
           <span className="brand-mark">{initials}</span>
@@ -66,6 +60,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <Nav counts={counts} />
 
         <div className="sidebar-foot">
+          <ThemeToggle />
           <span className="pill-live">
             <span className={`dot ${source === "api" ? "live" : ""}`} />
             {source === "api" ? "Live · connected" : "Demo · snapshot"}
