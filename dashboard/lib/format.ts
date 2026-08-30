@@ -40,7 +40,8 @@ export const STATUS_TONE: Record<string, "ok" | "warn" | "bad" | "info" | "mute"
   pending: "mute", responded: "ok", opted_out: "bad", skipped: "mute",
   now: "bad", this_week: "warn", flexible: "mute",
   answered: "ok", missed: "bad", transferred: "warn", inquiry: "info", complaint: "bad", callback: "warn", voicemail: "warn",
-  Positive: "ok", Negative: "bad", Neutral: "mute", vip: "ok", inactive: "warn", lead: "mute"
+  Positive: "ok", Negative: "bad", Neutral: "mute", vip: "ok", inactive: "warn", lead: "mute",
+  connected: "ok", not_configured: "warn", error: "bad", unknown: "mute"
 };
 
 export const LABELS: Record<string, string> = {
@@ -48,7 +49,11 @@ export const LABELS: Record<string, string> = {
   dropped_quiet_hours: "Quiet hours", opted_out: "Opted out", this_week: "This week",
   lead_follow_up: "Lead follow-up", re_engagement: "Re-engagement", reactivation: "Reactivation",
   appointment_reminder: "Appt reminder", no_show_recovery: "No-show recovery", review_request: "Review request",
-  appointment_confirmation: "Confirmation", appointment_completion: "Completion"
+  appointment_confirmation: "Confirmation", appointment_completion: "Thank-you",
+  appointment_rescheduled: "Reschedule", appointment_cancelled: "Cancellation",
+  missed_call: "Missed-call follow-up", lead_followup: "Lead follow-up",
+  appointment_t_24h: "24h reminder", appointment_t_2h: "2h reminder", appointment_t_48h: "48h reminder",
+  not_configured: "Not configured"
 };
 
 export const label = (v?: string | null) => (v ? LABELS[v] || v.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : "—");

@@ -13,6 +13,7 @@ import { createAiClient } from "./src/ai.mjs";
 import { ConversationService } from "./src/conversations.mjs";
 import { ReactivationService } from "./src/reactivation.mjs";
 import { RetellWebhookService, verifyRetellSignature } from "./src/retell-webhook.mjs";
+import { emailAutomationHealth } from "./src/email-health.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -410,6 +411,10 @@ export async function createRuntime(options = {}) {
 
       if (request.method === "GET" && url.pathname === "/health") {
         const inferred = await sweepNoShows();
+        let emailAutomation = "unknown";
+        try {
+          emailAutomation = (await emailAutomationHealth(opened.db, env, env.TENANT_ID || DEFAULT_TENANT_ID)).status;
+        } catch { /* health must never fail on this */ }
         return sendJson(response, 200, {
           status: "ok",
           database: opened.driver,
@@ -417,6 +422,7 @@ export async function createRuntime(options = {}) {
           retellWebhookAuth: retellWebhookAuthMode,
           toolWebhookAuth: toolWebhookAuthMode,
           aiEnabled: Boolean(ai?.enabled),
+          emailAutomation,
           noShowsInferredThisRequest: inferred.length,
           commit: env.RENDER_GIT_COMMIT ? env.RENDER_GIT_COMMIT.slice(0, 7) : null,
           requestId

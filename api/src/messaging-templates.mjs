@@ -13,6 +13,26 @@ const defaultTemplates = {
       body: "Guten Tag {{firstName}}, danke, dass Sie heute für {{service}} bei uns waren. Wir hoffen, Sie sind rundum zufrieden. Bis zum nächsten Mal bei {{salonName}}.",
       whatsapp: { name: "appointment_completion", bodyParameters: ["firstName", "service"] }
     },
+    appointment_rescheduled: {
+      subject: "Ihr Termin bei {{salonName}} wurde verschoben",
+      body: "Guten Tag {{firstName}}, Ihr Termin für {{service}} bei {{salonName}} wurde verschoben. Neuer Termin: {{appointmentTime}} bei {{staff}}{{addressPhrase}}. Falls das nicht passt, antworten Sie einfach auf diese Nachricht.",
+      whatsapp: { name: "appointment_rescheduled", bodyParameters: ["firstName", "service", "appointmentTime", "staff"] }
+    },
+    appointment_cancelled: {
+      subject: "Ihr Termin bei {{salonName}} wurde storniert",
+      body: "Guten Tag {{firstName}}, Ihr Termin für {{service}} am {{appointmentTime}} bei {{salonName}} wurde storniert. Möchten Sie einen neuen Termin? Antworten Sie auf diese Nachricht oder rufen Sie uns an unter {{salonPhone}}.",
+      whatsapp: { name: "appointment_cancelled", bodyParameters: ["firstName", "service", "appointmentTime", "salonPhone"] }
+    },
+    missed_call: {
+      subject: "Wir haben Ihren Anruf verpasst — {{salonName}}",
+      body: "Guten Tag {{firstName}}, Sie haben vorhin bei {{salonName}} angerufen und wir konnten leider nicht abnehmen. Antworten Sie einfach auf diese E-Mail oder rufen Sie uns zurück unter {{salonPhone}} — wir helfen Ihnen gern weiter.",
+      whatsapp: { name: "missed_call", bodyParameters: ["firstName", "salonPhone"] }
+    },
+    lead_followup: {
+      subject: "Ihre Anfrage bei {{salonName}}",
+      body: "Guten Tag {{firstName}}, danke für Ihre Anfrage{{serviceInterestPhrase}}. Wir haben aktuell freie Termine — antworten Sie einfach mit Ihrem Wunschtag oder rufen Sie uns an unter {{salonPhone}}, dann finden wir gemeinsam einen passenden Termin.",
+      whatsapp: { name: "lead_followup", bodyParameters: ["firstName", "serviceInterestPhrase", "salonPhone"] }
+    },
     reactivation_intro: {
       subject: "Wir würden Sie gern wiedersehen, {{firstName}}",
       body: "Guten Tag {{firstName}}, es ist eine Weile her seit Ihrem letzten Besuch bei {{salonName}}{{lastServicePhrase}}. Wir haben aktuell wieder freie Termine — antworten Sie einfach, wenn Sie einen Platz möchten.{{offerPhrase}}",
@@ -115,6 +135,26 @@ const defaultTemplates = {
       body: "Hello {{firstName}}, thank you for coming in for {{service}} today. We hope you're delighted with the result. See you next time at {{salonName}}.",
       whatsapp: { name: "appointment_completion", bodyParameters: ["firstName", "service"] }
     },
+    appointment_rescheduled: {
+      subject: "Your {{salonName}} appointment has been moved",
+      body: "Hello {{firstName}}, your {{service}} appointment at {{salonName}} has been rescheduled. New time: {{appointmentTime}} with {{staff}}{{addressPhrase}}. If that doesn't work, just reply to this message.",
+      whatsapp: { name: "appointment_rescheduled", bodyParameters: ["firstName", "service", "appointmentTime", "staff"] }
+    },
+    appointment_cancelled: {
+      subject: "Your {{salonName}} appointment has been cancelled",
+      body: "Hello {{firstName}}, your {{service}} appointment on {{appointmentTime}} at {{salonName}} has been cancelled. Would you like a new time? Reply to this message or call us on {{salonPhone}}.",
+      whatsapp: { name: "appointment_cancelled", bodyParameters: ["firstName", "service", "appointmentTime", "salonPhone"] }
+    },
+    missed_call: {
+      subject: "Sorry we missed your call — {{salonName}}",
+      body: "Hello {{firstName}}, you called {{salonName}} earlier and we couldn't pick up. Just reply to this email or call us back on {{salonPhone}} — we'll be happy to help.",
+      whatsapp: { name: "missed_call", bodyParameters: ["firstName", "salonPhone"] }
+    },
+    lead_followup: {
+      subject: "Your enquiry at {{salonName}}",
+      body: "Hello {{firstName}}, thanks for getting in touch{{serviceInterestPhrase}}. We have openings coming up — reply with a day that suits you, or call us on {{salonPhone}} and we'll find a time together.",
+      whatsapp: { name: "lead_followup", bodyParameters: ["firstName", "serviceInterestPhrase", "salonPhone"] }
+    },
     reactivation_intro: {
       subject: "We'd love to see you again, {{firstName}}",
       body: "Hello {{firstName}}, it's been a while since your last visit to {{salonName}}{{lastServicePhrase}}. We have openings again — just reply if you'd like us to hold a spot for you.{{offerPhrase}}",
@@ -212,6 +252,15 @@ function replaceTokens(value, variables) {
   return String(value ?? "").replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, name) => String(variables[name] ?? ""));
 }
 
+// Per-tenant kill switch for an operational email type. Default on.
+// tenant.messaging_config.email = { confirmation, reminder24h, reminder2h,
+//   reminder48h, rescheduled, cancelled, missedCall, leadFollowup, completion }
+export function emailTypeEnabled(tenant, key) {
+  const cfg = tenant?.messaging_config?.email;
+  if (!cfg || typeof cfg !== "object") return true;
+  return cfg[key] !== false;
+}
+
 function customTemplates(tenant) {
   return jsonValue(tenant?.messaging_config, {}).templates ?? {};
 }
@@ -238,12 +287,17 @@ export function renderMessageTemplate({ tenant, templateId, contact = {}, appoin
   const scheduledAppointmentTime = appointment.starts_at
     ? formatSpoken(appointment.starts_at, tenant.timezone || "Europe/Zurich")
     : "";
+  const salonAddress = tenant.contact_config?.address || tenant.contact_config?.location || "";
   const variables = {
     salonName: tenant.name || "the salon",
     firstName: contact.first_name || "there",
     service: appointment.service || "your appointment",
     staff: appointment.staff || "our team",
     appointmentTime: scheduledAppointmentTime,
+    address: salonAddress,
+    addressPhrase: salonAddress
+      ? (String(locale).startsWith("de") ? ` (Adresse: ${salonAddress})` : ` (address: ${salonAddress})`)
+      : "",
     severity: complaint.severity || "medium",
     complaintBody: complaint.body || "No details supplied.",
     ratingUrl: review.privateFeedbackUrl || review.private_feedback_url || "",

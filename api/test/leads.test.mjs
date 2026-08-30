@@ -78,30 +78,39 @@ test("ManyChat External Request payload becomes an Instagram lead with the subsc
   assert.equal(lead.urgency, "now");
 });
 
-test("a website lead schedules the full ladder, first step within minutes, on the right channel", async () => {
+test("an email lead schedules ONE follow-up (not the multi-step ladder), on the right channel", async () => {
   const before = Date.now();
   const out = await post("lead", { source: "website", name: "Nadia Keller", phone: "079 555 12 34", email: "nadia@example.ch", serviceInterest: "Balayage", urgency: "this_week" });
   assert.equal(out.logged, true);
   assert.equal(out.status, "contacted");
   assert.equal(out.channel, "email");
-  assert.equal(out.followUpsScheduled, LEAD_LADDER.length);
+  assert.equal(out.followUpsScheduled, 1, "email leads get a single operational follow-up");
 
-  const msgs = (await q(`select template_id, channel, delivery_status, scheduled_for, body from messages where contact_id = $1::uuid order by scheduled_for`, [out.contactId])).rows;
-  assert.deepEqual(msgs.map((m) => m.template_id), LEAD_LADDER.map((s) => s.templateId));
+  const msgs = (await q(`select template_id, channel, delivery_status, scheduled_for, subject, body from messages where contact_id = $1::uuid order by scheduled_for`, [out.contactId])).rows;
+  assert.deepEqual(msgs.map((m) => m.template_id), ["lead_followup"]);
   assert.ok(msgs.every((m) => m.channel === "email" && m.delivery_status === "queued"));
+  assert.ok(msgs[0].subject && msgs[0].subject.length > 0, "subject is persisted at enqueue time");
   const firstDelay = new Date(msgs[0].scheduled_for).getTime() - before;
-  assert.ok(firstDelay <= 12 * 3_600_000, "first follow-up is within minutes, or deferred only to the end of quiet hours");
+  assert.ok(firstDelay <= 12 * 3_600_000, "the follow-up is scheduled soon, or deferred only to the end of quiet hours");
   assert.match(msgs[0].body, /Nadia/);
   assert.match(msgs[0].body, /Balayage/);
   const runs = (await q(`select sequence_type, status from sequence_runs where contact_id = $1::uuid`, [out.contactId])).rows;
-  assert.equal(runs.filter((r) => r.sequence_type === "lead_follow_up").length, LEAD_LADDER.length);
-  console.log(`EVIDENCE lead_ladder=${JSON.stringify(msgs.map((m) => ({ t: m.template_id, at: m.scheduled_for })))}`);
+  assert.equal(runs.filter((r) => r.sequence_type === "lead_follow_up").length, 1);
+  console.log(`EVIDENCE lead_followup=${JSON.stringify(msgs.map((m) => ({ t: m.template_id, at: m.scheduled_for })))}`);
+});
+
+test("a WhatsApp / Instagram lead still schedules the full multi-step ladder", async () => {
+  const out = await post("lead", { source: "whatsapp", name: "Priya Shah", phone: "079 555 77 88", whatsappConsent: true, serviceInterest: "Cut & Finish" });
+  assert.equal(out.channel, "whatsapp");
+  assert.equal(out.followUpsScheduled, LEAD_LADDER.length);
+  const msgs = (await q(`select template_id from messages where contact_id = $1::uuid order by scheduled_for`, [out.contactId])).rows;
+  assert.deepEqual(msgs.map((m) => m.template_id), LEAD_LADDER.map((s) => s.templateId));
 });
 
 test("booking an appointment exits the lead ladder and marks the lead booked", async () => {
   const phone = "+41795550001";
   const lead = await post("lead", { source: "call", name: "Tom", phone, email: "tom@example.ch", serviceInterest: "Men's Cut" });
-  assert.equal(lead.followUpsScheduled, LEAD_LADDER.length);
+  assert.equal(lead.followUpsScheduled, 1);
   const day = futureBookable("wednesday", 10);
   const booking = await post("book-appointment", { startTime: zonedDateTime(day, "11:00", timezone).toISOString(), serviceId: "Men's Cut", staffId: "mara", customerName: "Tom", customerPhone: phone });
   assert.equal(booking.status, "booked");

@@ -2,6 +2,14 @@ import { randomUUID } from "node:crypto";
 import { jsonValue } from "./database.mjs";
 import { isQuietTime, nextQuietEnd } from "./time.mjs";
 import { renderMessageTemplate } from "./messaging-templates.mjs";
+import { renderBrandedEmail } from "./email-render.mjs";
+
+// Deliberately conservative: one @, a dot in the domain, no spaces. Anything
+// that fails this is treated as "no eligible recipient" and never sent.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function isValidEmail(value) {
+  return typeof value === "string" && value.length <= 254 && EMAIL_RE.test(value.trim());
+}
 
 const quietHoursFallback = { start: "21:00", end: "08:00" };
 
@@ -26,7 +34,10 @@ function asTenant(row) {
     ...row,
     quiet_hours: jsonValue(row.quiet_hours, quietHoursFallback),
     review_config: jsonValue(row.review_config, {}),
-    messaging_config: jsonValue(row.messaging_config, {})
+    messaging_config: jsonValue(row.messaging_config, {}),
+    contact_config: jsonValue(row.contact_config, {}),
+    links: jsonValue(row.links, {}),
+    branding: jsonValue(row.branding, {})
   };
 }
 
@@ -177,7 +188,7 @@ export class MessageDispatcher {
           c.first_name, c.email, c.phone_e164, c.email_consent, c.manychat_subscriber_id, c.whatsapp_consent, c.sms_consent,
           a.starts_at, a.ends_at, a.service, a.staff,
           t.name as tenant_name, t.locale, t.fallback_locale, t.timezone,
-          t.quiet_hours, t.review_config, t.messaging_config,
+          t.quiet_hours, t.review_config, t.messaging_config, t.contact_config, t.links, t.branding,
           t.review_config->>'ownerAlertEmail' as owner_alert_email
         from messages m
         join message_dispatch_state s on s.message_id = m.id
@@ -220,7 +231,10 @@ export class MessageDispatcher {
               timezone: row.timezone,
               quiet_hours: row.quiet_hours,
               review_config: row.review_config,
-              messaging_config: row.messaging_config
+              messaging_config: row.messaging_config,
+              contact_config: row.contact_config,
+              links: row.links,
+              branding: row.branding
             })
           });
         }
@@ -229,14 +243,18 @@ export class MessageDispatcher {
     });
   }
 
-  async finish(message, status, now, { error = null, retryAt = null } = {}) {
+  async finish(message, status, now, { error = null, retryAt = null, recipient = null, subject = null, providerMessageId = null } = {}) {
     const terminal = ["sent", "stubbed", "failed", "dropped_quiet_hours"].includes(status);
     const result = await this.db.transaction(async (tx) => {
       const updateMessage = await tx.query(`
         update messages
         set delivery_status = $3,
             scheduled_for = coalesce($4::timestamptz, scheduled_for),
-            sent_at = case when $3 = 'sent' then $5::timestamptz else sent_at end
+            sent_at = case when $3 = 'sent' then $5::timestamptz else sent_at end,
+            recipient = coalesce($7, recipient),
+            subject = coalesce($8, subject),
+            provider_message_id = coalesce($9, provider_message_id),
+            last_error = case when $3 = 'sent' then null else coalesce($6, last_error) end
         where id = $1::uuid
           and delivery_status = 'queued'
           and exists (
@@ -244,7 +262,7 @@ export class MessageDispatcher {
             where message_id = $1::uuid and lock_token = $2::uuid
           )
         returning id::text
-      `, [message.id, message.claimToken, status, retryAt, now.toISOString()]);
+      `, [message.id, message.claimToken, status, retryAt, now.toISOString(), error, recipient, subject, providerMessageId]);
       if (!updateMessage.rows.length) return false;
       await tx.query(`
         update message_dispatch_state
@@ -294,14 +312,17 @@ export class MessageDispatcher {
 
   async rejectWithoutConsent(message, now) {
     const recipient = recipientFor(message);
-    if (hasConsent(message) && recipient) return false;
-    await this.finish(message, "failed", now, {
-      error: recipient ? `Missing ${message.channel} consent.` : `No eligible ${message.channel} recipient.`
-    });
-    log(this.logger, "warn", "message_not_sent_no_consent", {
+    const badEmail = message.channel === "email" && recipient && !isValidEmail(recipient);
+    if (hasConsent(message) && recipient && !badEmail) return false;
+    const reason = badEmail
+      ? `Invalid email address: ${recipient}`
+      : recipient ? `Missing ${message.channel} consent.` : `No eligible ${message.channel} recipient.`;
+    await this.finish(message, "failed", now, { error: reason, recipient: recipient || null });
+    log(this.logger, "warn", "message_not_sent_ineligible", {
       messageId: message.id,
       channel: message.channel,
-      templateId: message.template_id
+      templateId: message.template_id,
+      reason
     });
     return true;
   }
@@ -310,34 +331,53 @@ export class MessageDispatcher {
     if (await this.rejectWithoutConsent(message, now)) return "failed";
     if (await this.deferForQuietHours(message, now)) return isTwoHourReminder(message) ? "dropped_quiet_hours" : "deferred";
 
+    const appointmentContext = {
+      starts_at: message.starts_at, ends_at: message.ends_at, service: message.service, staff: message.staff
+    };
     const rendered = renderMessageTemplate({
       tenant: message.tenant,
       templateId: message.template_id,
       contact: { first_name: message.first_name },
-      appointment: { starts_at: message.starts_at, ends_at: message.ends_at, service: message.service, staff: message.staff },
+      appointment: appointmentContext,
       complaint: { body: message.body }
     });
     // The rendered copy was persisted when the sequence was created. Preserve
     // that immutable queued body so delayed delivery does not change customer
     // wording if the tenant later edits a template.
     rendered.body = message.body || rendered.body;
+    // Branded HTML for email; plain-text stays the source copy above.
+    if (message.channel === "email") {
+      const branded = renderBrandedEmail({
+        tenant: message.tenant,
+        templateId: message.template_id,
+        rendered,
+        appointment: appointmentContext
+      });
+      rendered.html = branded.html;
+      rendered.subject = branded.subject;
+    }
     const recipient = recipientFor(message);
     try {
       const outcome = await this.transport.send({ message, tenant: message.tenant, recipient, rendered });
       const status = outcome?.status === "stubbed" ? "stubbed" : "sent";
-      await this.finish(message, status, now);
+      await this.finish(message, status, now, {
+        recipient: outcome?.recipient ?? recipient ?? null,
+        subject: outcome?.subject ?? rendered.subject ?? null,
+        providerMessageId: outcome?.providerMessageId ?? null
+      });
       log(this.logger, "info", "message_dispatched", {
         messageId: message.id,
         channel: message.channel,
         templateId: message.template_id,
         status,
-        provider: outcome?.provider ?? null
+        provider: outcome?.provider ?? null,
+        providerMessageId: outcome?.providerMessageId ?? null
       });
       return status;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (message.attempt_count >= this.maxAttempts) {
-        await this.finish(message, "failed", now, { error: detail });
+        await this.finish(message, "failed", now, { error: detail, recipient: recipient || null, subject: rendered.subject ?? null });
         log(this.logger, "error", "message_failed_terminal", {
           messageId: message.id,
           attempts: message.attempt_count,
@@ -346,7 +386,7 @@ export class MessageDispatcher {
         return "failed";
       }
       const retryAt = new Date(now.getTime() + retryDelayMs(message.attempt_count, this.baseRetryMs, this.maxRetryMs));
-      await this.finish(message, "queued", now, { error: detail, retryAt: retryAt.toISOString() });
+      await this.finish(message, "queued", now, { error: detail, retryAt: retryAt.toISOString(), recipient: recipient || null, subject: rendered.subject ?? null });
       log(this.logger, "warn", "message_retry_scheduled", {
         messageId: message.id,
         attempts: message.attempt_count,
