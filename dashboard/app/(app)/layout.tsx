@@ -38,11 +38,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     "--accent": brand.accent || "#7cf2c8"
   } as CSSProperties;
 
+  const initials = (tenantName.match(/\b[A-Za-z]/g) || ["A"]).join("").slice(0, 2).toUpperCase();
+
   return (
     <div className="shell" style={style}>
       <aside className="sidebar">
         <Link href="/" className="brand">
-          <span className="brand-mark">{(tenantName[0] || "A").toUpperCase()}</span>
+          <span className="brand-mark">{initials}</span>
           <span>
             <div className="brand-name">{tenantName}</div>
             <div className="brand-sub">AI Receptionist</div>
@@ -50,13 +52,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         </Link>
 
         {tenants.length > 1 ? (
-          <form action={switchTenant} className="row" style={{ padding: "0 8px 6px", gap: 6 }}>
-            <select className="select" name="tenantId" defaultValue="" style={{ flex: 1 }}>
-              <option value="" disabled>Switch salon…</option>
-              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            <button className="btn sm" type="submit">Go</button>
-          </form>
+          <div className="biz-switcher">
+            <form action={switchTenant}>
+              <select className="select" name="tenantId" defaultValue="" style={{ flex: 1 }}>
+                <option value="" disabled>Switch salon…</option>
+                {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <button className="btn sm" type="submit">Go</button>
+            </form>
+          </div>
         ) : null}
 
         <Nav counts={counts} />
